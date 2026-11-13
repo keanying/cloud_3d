@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloud 3D · Market Shell</title>
+<meta name="description" content="Real-time crypto market HUD powered by Gate.io public spot & perpetual data.">
+<link rel="stylesheet" href="css/app.css">
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">C3</div>
+    <div class="brand-txt">
+      <div class="brand-sub"><span class="live-dot"></span><span data-i18n="brand.tag"></span></div>
+      <div class="brand-title">CLOUD_3D <span class="sl">//</span> <span data-i18n="brand.title"></span></div>
+      <div class="brand-sub2" data-i18n="brand.sub"></div>
+    </div>
+  </div>
+  <div class="hstats">
+    <div class="hstat"><label id="h-sym">BTC</label><b id="h-price">—</b></div>
+    <div class="hstat"><label data-i18n="h.chg"></label><b id="h-chg">—</b></div>
+    <div class="hstat"><label data-i18n="h.breadth"></label><b id="h-breadth">—</b></div>
+    <div class="hstat"><label data-i18n="h.vol"></label><b id="h-vol">—</b></div>
+    <div class="hstat"><label data-i18n="h.oi"></label><b id="h-oi">—</b></div>
+  </div>
+  <div class="hright">
+    <div class="clock" id="clock">--:--:-- UTC</div>
+    <div class="hctl">
+      <select id="sym-select" aria-label="symbol"></select>
+      <div class="conn"><i id="c-rest"></i>REST<i id="c-spot"></i>SPOT<i id="c-fut"></i>PERP</div>
+      <button id="lang-btn" class="lang" type="button" aria-label="language"><span data-l="zh">中</span><span class="sep">/</span><span data-l="en">EN</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="tickerbar">
+  <span class="live-tag" data-i18n="live"></span>
+  <div class="marquee"><div class="mq-track" id="mq-top"></div></div>
+</div>
+
+<main class="grid">
+
+  <!-- ===== Market overview ===== -->
+  <section class="panel a-ov">
+    <div class="ph"><span class="pt" data-i18n="ov.title"></span><span class="ptag">GATE · USDT</span></div>
+    <div class="pb ov">
+      <div class="ov-label" data-i18n="ov.vol"></div>
+      <div class="ov-big up" id="ov-vol">—</div>
+      <div class="ov-sub" id="ov-sub">—</div>
+      <div class="breadth"><i id="ov-bar-up"></i><i id="ov-bar-dn"></i></div>
+      <div class="kv3">
+        <div><label data-i18n="ov.up"></label><b class="up" id="ov-up">—</b></div>
+        <div><label data-i18n="ov.dn"></label><b class="dn" id="ov-dn">—</b></div>
+        <div><label data-i18n="ov.breadth"></label><b id="ov-breadth">—</b></div>
+      </div>
+      <div class="kv3">
+        <div><label data-i18n="ov.oi"></label><b id="ov-oi">—</b></div>
+        <div><label data-i18n="ov.pvol"></label><b id="ov-pvol">—</b></div>
+        <div><label data-i18n="ov.fund"></label><b id="ov-fund">—</b></div>
+      </div>
+      <div class="movers">
+        <div><label data-i18n="ov.gainer"></label><b class="up" id="ov-gainer">—</b></div>
+        <div><label data-i18n="ov.loser"></label><b class="dn" id="ov-loser">—</b></div>
+      </div>
+    </div>
+    <div class="ph sub"><span class="pt" data-i18n="ld.title"></span><span class="sym-name">BTC</span><span class="ptag" id="ld-spread">—</span></div>
+    <div class="pb ladder-wrap">
+      <div class="ladder" id="ladder"></div>
+      <canvas class="ld-spark" id="cv-ld"></canvas>
+    </div>
+  </section>
+
+  <!-- ===== Spot chart + depth ===== -->
+  <section class="panel a-sp">
+    <div class="ph"><span class="pt"><span class="sym-name">BTC</span> <span data-i18n="sp.title"></span></span><span class="ptag" id="sp-chg">—</span></div>
+    <div class="pb sp">
+      <div class="sp-top">
+        <div class="sp-price" id="sp-price">—</div>
+        <div class="sp-hl"><span><label>H</label><b id="sp-high">—</b></span><span><label>L</label><b id="sp-low">—</b></span><span><label data-i18n="sp.qv"></label><b id="sp-qv">—</b></span></div>
+      </div>
+      <canvas class="cv-candles" id="cv-candles"></canvas>
+      <div class="sp-legend"><span class="tag up">1m</span><span data-i18n="sp.legend"></span></div>
+      <div class="depth">
+        <div class="dh"><span data-i18n="dp.price"></span><span data-i18n="dp.size"></span><span data-i18n="dp.cum"></span></div>
+        <div id="depth-asks"></div>
+        <div class="dspread" id="depth-spread">—</div>
+        <div id="depth-bids"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Latency & basis + wire inspector ===== -->
+  <section class="panel a-bs">
+    <div class="ph"><span class="pt" data-i18n="bs.title"></span><span class="ptag"><span class="sym-name">BTC</span> · SPOT / PERP / INDEX</span></div>
+    <div class="pb bs">
+      <canvas class="cv-basis" id="cv-basis"></canvas>
+      <div class="bs-stats">
+        <div><label data-i18n="bs.latS"></label><b id="bs-lat-s">—</b></div>
+        <div><label data-i18n="bs.latF"></label><b id="bs-lat-f">—</b></div>
+        <div><label data-i18n="bs.basis"></label><b id="bs-basis">—</b></div>
+        <div><label data-i18n="bs.prem"></label><b id="bs-prem">—</b></div>
+        <div><label data-i18n="bs.mark"></label><b id="bs-mark">—</b></div>
+        <div><label data-i18n="bs.index"></label><b id="bs-index">—</b></div>
+      </div>
+    </div>
+    <div class="ph sub"><span class="pt" data-i18n="wi.title"></span><span class="ptag" id="wi-rate">— msg/s</span></div>
+    <div class="pb wi">
+      <div class="wire" id="wire"></div>
+      <div class="wi-stats">
+        <div><label data-i18n="wi.total"></label><b id="wi-total">—</b></div>
+        <div><label data-i18n="wi.bytes"></label><b id="wi-bytes">—</b></div>
+        <div><label data-i18n="wi.subs"></label><b id="wi-subs">—</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Neural shell ===== -->
+  <section class="panel a-sh">
+    <div class="ph"><span class="pt" data-i18n="sh.title"></span><span class="ph-note"></span><span class="ptag" id="sh-count">—</span></div>
+    <div class="shell-wrap" id="shell-wrap">
+      <canvas id="cv-shell"></canvas>
+      <canvas id="cv-wires"></canvas>
+      <div id="shell-labels"></div>
+      <div class="inputs" id="inputs"></div>
+      <div class="fills">
+        <div class="fills-h"><span data-i18n="wh.title"></span><span class="ptag" id="wh-th">—</span></div>
+        <div class="whales" id="whales"></div>
+        <div class="hist-h"><span data-i18n="wh.hist"></span><b id="hist-now">—</b></div>
+        <canvas class="cv-hist" id="cv-hist"></canvas>
+      </div>
+      <div class="shell-foot" data-i18n="sh.legend"></div>
+      <div class="shell-tip" id="shell-tip"></div>
+      <div class="shell-wait" id="shell-wait" data-i18n="sh.wait"></div>
+    </div>
+  </section>
+
+  <!-- ===== Execution tape ===== -->
+  <section class="panel a-tp">
+    <div class="ph"><span class="pt" data-i18n="tp.title"></span><span class="ptag"><span class="sym-name">BTC</span> · SPOT + PERP</span></div>
+    <div class="pb tp">
+      <div class="tape-scroll">
+        <table class="tape">
+          <thead><tr><th data-i18n="tp.time"></th><th data-i18n="tp.mkt"></th><th data-i18n="tp.side"></th><th data-i18n="tp.price"></th><th data-i18n="tp.amt"></th><th data-i18n="tp.usd"></th></tr></thead>
+          <tbody id="tape-body"></tbody>
+        </table>
+      </div>
+      <div class="flow">
+        <div class="flow-h" data-i18n="tp.flow"></div>
+        <canvas class="cv-flow" id="cv-flow"></canvas>
+        <div class="flow-leg"><span class="up" id="fl-buy">—</span><span class="dn" id="fl-sell">—</span></div>
+      </div>
+    </div>
+    <div class="cards4">
+      <div class="card"><label data-i18n="tp.c.last"></label><b id="tc-last">—</b></div>
+      <div class="card"><label data-i18n="tp.c.buy"></label><b id="tc-buy">—</b></div>
+      <div class="card"><label data-i18n="tp.c.vol"></label><b id="tc-vol">—</b></div>
+      <div class="card"><label data-i18n="tp.c.whales"></label><b id="tc-whales">—</b></div>
+    </div>
+  </section>
+
+  <!-- ===== Vol cone & liquidation funnel ===== -->
+  <section class="panel a-fn">
+    <div class="ph"><span class="pt" data-i18n="fn.title"></span><span class="ptag"><span class="sym-name">BTC</span> · 1m · ±1σ / ±2σ</span></div>
+    <div class="pb fn">
+      <canvas class="cv-funnel" id="cv-funnel"></canvas>
+      <div class="liq-list" id="liq-list"></div>
+    </div>
+    <div class="cards4">
+      <div class="card"><label data-i18n="fn.c.fund"></label><b id="fc-fund">—</b><small id="fc-fund-r">—</small></div>
+      <div class="card"><label data-i18n="fn.c.vol"></label><b id="fc-vol">—</b><small data-i18n="fn.c.volsub"></small></div>
+      <div class="card"><label data-i18n="fn.c.lsr"></label><b id="fc-lsr">—</b><small id="fc-lsr-s">—</small></div>
+      <div class="card"><label data-i18n="fn.c.liq"></label><b id="fc-liq">—</b><small id="fc-liq-s">—</small></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="tickerbar bottom">
+  <div class="marquee"><div class="mq-track slow" id="mq-bottom"></div></div>
+</footer>
+<div class="disclaimer" data-i18n="disclaimer"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+import { locale } from './i18n.js';
+
+const ok = (v) => v != null && Number.isFinite(v);
+const nf = new Map();
+function fmt(key, opts) {
+  const k = locale() + key;
+  if (!nf.has(k)) nf.set(k, new Intl.NumberFormat(locale(), opts));
+  return nf.get(k);
+}
+
+/** 1.28B / 12.8亿 */
+export function compact(v, d = 2) {
+  if (!ok(v)) return '—';
+  return fmt('c' + d, { notation: 'compact', maximumFractionDigits: d }).format(v);
+}
+export const usd = (v, d = 2) => (ok(v) ? (v < 0 ? '-$' : '$') + compact(Math.abs(v), d) : '—');
+
+export function priceDigits(p) {
+  const a = Math.abs(p);
+  if (a >= 10000) return 1;
+  if (a >= 100) return 2;
+  if (a >= 1) return 3;
+  if (a >= 0.01) return 5;
+  if (a >= 0.0001) return 7;
+  return 9;
+}
+export function price(p, d) {
+  if (!ok(p)) return '—';
+  const n = d ?? priceDigits(p);
+  return p.toLocaleString('en-US', { minimumFractionDigits: n, maximumFractionDigits: n });
+}
+export function num(v, d = 0) {
+  if (!ok(v)) return '—';
+  return v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+/** Size (base amount) with adaptive precision */
+export function amt(v) {
+  if (!ok(v)) return '—';
+  const a = Math.abs(v);
+  return num(v, a >= 1000 ? 0 : a >= 10 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 4 : 6);
+}
+export function pct(v, d = 2) {
+  if (!ok(v)) return '—';
+  return (v > 0 ? '+' : '') + v.toFixed(d) + '%';
+}
+export function bps(v, d = 1) {
+  if (!ok(v)) return '—';
+  return (v > 0 ? '+' : '') + v.toFixed(d);
+}
+const p2 = (n) => String(n).padStart(2, '0');
+export function hms(ms) {
+  const d = new Date(ms);
+  return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
+}
+export function hmsms(ms) {
+  const d = new Date(ms);
+  return hms(ms) + '.' + String(d.getUTCMilliseconds()).padStart(3, '0');
+}
+export function dur(sec) {
+  if (!ok(sec) || sec < 0) return '—';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+  return `${p2(h)}:${p2(m)}:${p2(s)}`;
+}
+export function bytes(n) {
+  if (!ok(n)) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(2) + ' MB';
+}
+export const base = (pair) => (pair || '').split('_')[0];
+export const cls = (v) => (v > 0 ? 'up' : v < 0 ? 'dn' : '');
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);

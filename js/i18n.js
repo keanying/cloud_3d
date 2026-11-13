@@ -1,0 +1,255 @@
+// Chinese / English dictionary + DOM binding.
+const DICT = {
+  zh: {
+    'brand.tag': '全市场实时 · 数据源 GATE.IO',
+    'brand.title': '加密市场神经壳',
+    'brand.sub': '现货 / USDT 永续 · 公开行情 · 无需 API Key',
+    'h.chg': '24H 涨跌',
+    'h.breadth': '上涨占比',
+    'h.vol': '现货 24H 成交',
+    'h.oi': '永续持仓',
+    live: '● 实时',
+
+    'ov.title': '市场总览',
+    'ov.vol': '24H 现货总成交额 (USDT 交易对)',
+    'ov.sub': '{n} 个交易对 · 平均 {avg} · 成交额加权 {wavg}',
+    'ov.up': '上涨',
+    'ov.dn': '下跌',
+    'ov.breadth': '上涨占比',
+    'ov.oi': '永续持仓',
+    'ov.pvol': '永续 24H 成交',
+    'ov.fund': '加权资金费率',
+    'ov.gainer': '领涨 (成交≥$30万)',
+    'ov.loser': '领跌 (成交≥$30万)',
+    'ld.title': '盘口阶梯',
+    'ld.spread': '价差 {v}',
+
+    'sp.title': '现货',
+    'sp.qv': '成交额',
+    'sp.legend': '实时 K 线 · 现价标签 · 量柱',
+    'dp.price': '价格',
+    'dp.size': '数量',
+    'dp.cum': '累计',
+    'dp.spread': '价差 {v} · {bps} bps',
+
+    'bs.title': '延迟与基差',
+    'bs.latS': '现货延迟',
+    'bs.latF': '永续延迟',
+    'bs.basis': '永续-现货',
+    'bs.prem': '标记-指数',
+    'bs.mark': '标记价',
+    'bs.index': '指数价',
+    'bs.legend.basis': '基差 bps',
+    'bs.legend.prem': '溢价 bps',
+    'bs.legend.lat': '延迟 ms',
+
+    'wi.title': '数据流检查器 · WS 原始消息',
+    'wi.total': '已收消息',
+    'wi.bytes': '已收流量',
+    'wi.subs': '订阅数',
+
+    'sh.title': '神经壳 · 全市场 3D',
+    'sh.note': '成交额前 {n} 的币种 · 每簇针刺代表一个币',
+    'sh.count': '{n} 簇',
+    'sh.legend': '针长 = 24H 涨跌幅 · 针密度 = 成交额 · 亮度 = 实时成交脉冲 · 绿涨红跌 · 拖拽旋转 · 点击切换币种',
+    'sh.wait': '正在连接 GATE.IO …',
+    'sh.tip.price': '现价',
+    'sh.tip.chg': '24H',
+    'sh.tip.vol': '成交额',
+    'sh.tip.perp': '资金费率',
+
+    'in.spot': '现货 · 24H {chg}',
+    'in.basis': '永续-现货基差',
+    'in.basis.s': '{sym} · bps · 实时',
+    'in.fund': '资金费率',
+    'in.fund.s': '{sym} · 近 {n} 期',
+    'in.lsr': '多空人数比',
+    'in.lsr.s': '{sym} · 5m · 近 2H',
+
+    'wh.title': '巨鲸成交',
+    'wh.th': '现货≥{s} · 永续≥{p}',
+    'wh.hist': '成交笔数/秒 · 60s',
+    'wh.buy': '买入',
+    'wh.sell': '卖出',
+    'wh.empty': '等待大额成交…',
+    spot: '现货',
+    perp: '永续',
+
+    'tp.title': '逐笔成交',
+    'tp.time': '时间 UTC',
+    'tp.mkt': '市场',
+    'tp.side': '方向',
+    'tp.price': '价格',
+    'tp.amt': '数量',
+    'tp.usd': '金额',
+    'tp.flow': '买卖力量 · 60s / 5s',
+    'tp.c.last': '最新成交',
+    'tp.c.buy': '60s 主动买入占比',
+    'tp.c.vol': '60s 成交额',
+    'tp.c.whales': '本页巨鲸单数',
+
+    'fn.title': '波动锥 · 爆仓漏斗',
+    'fn.now': '现在',
+    'fn.c.fund': '距资金费结算',
+    'fn.c.vol': '1H 实现波动',
+    'fn.c.volsub': '年化 · 由 1m K 线计算',
+    'fn.c.lsr': '多空人数比',
+    'fn.c.liq': '近 2H 爆仓额',
+    'fn.liq.long': '多头爆仓',
+    'fn.liq.short': '空头爆仓',
+    'fn.liq.head': '全市场爆仓 · 实时',
+    'fn.liq.split': '多 {l} / 空 {s}',
+    'fn.nofut': '该币种无 USDT 永续合约',
+    'fn.wait': '等待 K 线数据…',
+
+    'mq.gain': '领涨',
+    'mq.lose': '领跌',
+    'mq.summary': '全市场 {n} 个 USDT 交易对 · 上涨 {up} / 下跌 {dn} · 24H 现货成交 {vol} · 永续持仓 {oi} · 永续 24H 成交 {pvol} · 加权资金费率 {fund} · 本页已观测爆仓 {liq} · 巨鲸单 {wh} 笔',
+    disclaimer: '数据来自 Gate.io 公开 API（现货 / USDT 永续），仅供展示，不构成投资建议。延迟为基于服务器时间校准的估算值。',
+    nodata: '—',
+  },
+  en: {
+    'brand.tag': 'WHOLE MARKET LIVE · SOURCE GATE.IO',
+    'brand.title': 'CRYPTO MARKET SHELL',
+    'brand.sub': 'Spot / USDT perps · public feeds · no API key',
+    'h.chg': '24H CHG',
+    'h.breadth': 'BREADTH',
+    'h.vol': 'SPOT 24H VOL',
+    'h.oi': 'PERP OI',
+    live: '● LIVE FEED',
+
+    'ov.title': 'Market overview',
+    'ov.vol': '24H spot volume (USDT pairs)',
+    'ov.sub': '{n} pairs · avg {avg} · vol-weighted {wavg}',
+    'ov.up': 'Advancing',
+    'ov.dn': 'Declining',
+    'ov.breadth': 'Breadth',
+    'ov.oi': 'Perp OI',
+    'ov.pvol': 'Perp 24H vol',
+    'ov.fund': 'OI-wtd funding',
+    'ov.gainer': 'Top gainer (vol≥$300K)',
+    'ov.loser': 'Top loser (vol≥$300K)',
+    'ld.title': 'Book ladder',
+    'ld.spread': 'spread {v}',
+
+    'sp.title': 'Spot',
+    'sp.qv': 'Vol',
+    'sp.legend': 'Live candles · last-price tag · volume',
+    'dp.price': 'Price',
+    'dp.size': 'Size',
+    'dp.cum': 'Total',
+    'dp.spread': 'spread {v} · {bps} bps',
+
+    'bs.title': 'Feed latency & basis',
+    'bs.latS': 'Spot lat',
+    'bs.latF': 'Perp lat',
+    'bs.basis': 'Perp-spot',
+    'bs.prem': 'Mark-index',
+    'bs.mark': 'Mark',
+    'bs.index': 'Index',
+    'bs.legend.basis': 'basis bps',
+    'bs.legend.prem': 'premium bps',
+    'bs.legend.lat': 'latency ms',
+
+    'wi.title': 'Wire inspector · raw WS frames',
+    'wi.total': 'Frames',
+    'wi.bytes': 'Bytes',
+    'wi.subs': 'Subs',
+
+    'sh.title': 'Neural shell · market 3D',
+    'sh.note': 'top {n} coins by volume · one needle cluster per coin',
+    'sh.count': '{n} clusters',
+    'sh.legend': 'Needle length = 24H change · density = volume · glow = live trade pulses · green up / red down · drag to rotate · click to select',
+    'sh.wait': 'CONNECTING TO GATE.IO …',
+    'sh.tip.price': 'Last',
+    'sh.tip.chg': '24H',
+    'sh.tip.vol': 'Volume',
+    'sh.tip.perp': 'Funding',
+
+    'in.spot': 'Spot · 24H {chg}',
+    'in.basis': 'Perp-spot basis',
+    'in.basis.s': '{sym} · bps · live',
+    'in.fund': 'Funding rate',
+    'in.fund.s': '{sym} · last {n} periods',
+    'in.lsr': 'Long/short ratio',
+    'in.lsr.s': '{sym} · 5m · last 2H',
+
+    'wh.title': 'Whale fills',
+    'wh.th': 'spot≥{s} · perp≥{p}',
+    'wh.hist': 'Trades/sec · 60s',
+    'wh.buy': 'BUY',
+    'wh.sell': 'SELL',
+    'wh.empty': 'Waiting for large fills…',
+    spot: 'SPOT',
+    perp: 'PERP',
+
+    'tp.title': 'Execution tape · time & sales',
+    'tp.time': 'Time UTC',
+    'tp.mkt': 'Mkt',
+    'tp.side': 'Side',
+    'tp.price': 'Price',
+    'tp.amt': 'Size',
+    'tp.usd': 'Notional',
+    'tp.flow': 'Buy/sell flow · 60s / 5s',
+    'tp.c.last': 'Last fill',
+    'tp.c.buy': '60s taker-buy share',
+    'tp.c.vol': '60s notional',
+    'tp.c.whales': 'Whales this session',
+
+    'fn.title': 'Vol cone · liquidation funnel',
+    'fn.now': 'now',
+    'fn.c.fund': 'Next funding in',
+    'fn.c.vol': '1H realized vol',
+    'fn.c.volsub': 'annualized · from 1m candles',
+    'fn.c.lsr': 'Long/short accounts',
+    'fn.c.liq': '2H liquidations',
+    'fn.liq.long': 'LONG LIQ',
+    'fn.liq.short': 'SHORT LIQ',
+    'fn.liq.head': 'Market-wide liquidations · live',
+    'fn.liq.split': 'long {l} / short {s}',
+    'fn.nofut': 'No USDT perpetual for this coin',
+    'fn.wait': 'Waiting for candles…',
+
+    'mq.gain': 'TOP GAINERS',
+    'mq.lose': 'TOP LOSERS',
+    'mq.summary': '{n} USDT pairs · {up} up / {dn} down · spot 24H vol {vol} · perp OI {oi} · perp 24H vol {pvol} · OI-weighted funding {fund} · liquidations seen this session {liq} · whale fills {wh}',
+    disclaimer: 'Data: Gate.io public API (spot / USDT perpetuals). For display only, not investment advice. Latency is an estimate calibrated against server time.',
+    nodata: '—',
+  },
+};
+
+function initialLang() {
+  try {
+    const s = localStorage.getItem('c3.lang');
+    if (s === 'zh' || s === 'en') return s;
+  } catch (e) { /* storage unavailable */ }
+  return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+}
+
+let lang = initialLang();
+const listeners = new Set();
+
+export const getLang = () => lang;
+export const locale = () => (lang === 'zh' ? 'zh-CN' : 'en-US');
+
+export function t(key, vars) {
+  let s = DICT[lang][key] ?? DICT.en[key] ?? key;
+  if (vars) s = s.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ''));
+  return s;
+}
+
+export function applyDom(root = document) {
+  root.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.querySelectorAll('#lang-btn [data-l]').forEach((el) => el.classList.toggle('on', el.dataset.l === lang));
+}
+
+export function setLang(l) {
+  if (l !== 'zh' && l !== 'en') return;
+  lang = l;
+  try { localStorage.setItem('c3.lang', l); } catch (e) { /* ignore */ }
+  applyDom();
+  listeners.forEach((f) => f(l));
+}
+
+export const onLang = (f) => listeners.add(f);
