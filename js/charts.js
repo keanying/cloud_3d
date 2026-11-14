@@ -174,3 +174,66 @@ export function drawDist(cv, bins) {
   });
   ctx.textAlign = 'left';
 }
+
+/**
+ * Liquidation bubble timeline. liqs: [{ts, side:'long'|'short', notional}] newest first.
+ * x = last `mins` minutes, y = log10(notional); bottom strip = 5-minute long/short totals.
+ */
+export function drawLiqMap(cv, liqs, now, labels, mins = 60) {
+  const { ctx, w, h } = fitCanvas(cv);
+  const padL = 44, padR = 8, padT = 8, stripH = 34, axisH = 14;
+  const plotH = h - padT - stripH - axisH - 6, plotW = w - padL - padR;
+  if (plotW < 50 || plotH < 30) return;
+  const t0 = now - mins * 60000;
+  const X = (ts) => padL + ((ts - t0) / (mins * 60000)) * plotW;
+  const yLo = 1, yHi = 7; // $10 … $10M
+  const Y = (n) => padT + (1 - (Math.min(yHi, Math.max(yLo, Math.log10(Math.max(1, n)))) - yLo) / (yHi - yLo)) * plotH;
+  ctx.font = FONT; ctx.textBaseline = 'middle';
+  // grid
+  for (const [v, lab] of [[2, '$100'], [3, '$1K'], [4, '$10K'], [5, '$100K'], [6, '$1M']]) {
+    const y = padT + (1 - (v - yLo) / (yHi - yLo)) * plotH;
+    ctx.strokeStyle = C.grid; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.dim2; ctx.textAlign = 'right'; ctx.fillText(lab, padL - 6, y);
+  }
+  ctx.textAlign = 'center';
+  for (let m = 0; m <= mins; m += 15) {
+    const x = X(now - m * 60000);
+    ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+    ctx.fillStyle = C.dim2; ctx.fillText(m ? `-${m}m` : labels.now, Math.min(w - 16, x), h - axisH / 2);
+  }
+  // 5-minute buckets (short liqs up / long liqs down)
+  const nb = Math.round(mins / 5), bw = plotW / nb, bk = Array.from({ length: nb }, () => ({ l: 0, s: 0 }));
+  for (const q of liqs) {
+    if (q.ts < t0) break;
+    const i = Math.min(nb - 1, Math.floor((q.ts - t0) / 300000));
+    if (q.side === 'long') bk[i].l += q.notional; else bk[i].s += q.notional;
+  }
+  const bmax = Math.max(1, ...bk.map((b) => Math.max(b.l, b.s)));
+  const mid = padT + plotH + 6 + stripH / 2;
+  ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(padL, mid); ctx.lineTo(w - padR, mid); ctx.stroke();
+  bk.forEach((b, i) => {
+    const x = padL + i * bw + 1, su = (b.s / bmax) * (stripH / 2 - 1), lu = (b.l / bmax) * (stripH / 2 - 1);
+    ctx.fillStyle = hexA(C.green, 0.75); ctx.fillRect(x, mid - su, bw - 2, su);
+    ctx.fillStyle = hexA(C.red, 0.75); ctx.fillRect(x, mid, bw - 2, lu);
+  });
+  ctx.textAlign = 'right'; ctx.fillStyle = C.dim2; ctx.fillText('5m', padL - 6, mid);
+  // bubbles, oldest first so new ones draw on top
+  for (let i = liqs.length - 1; i >= 0; i--) {
+    const q = liqs[i];
+    if (q.ts < t0) continue;
+    const x = X(q.ts), y = Y(q.notional), col = q.side === 'long' ? C.red : C.green;
+    const r = 1.6 + Math.max(0, Math.log10(Math.max(10, q.notional)) - 1) * 1.7;
+    const age = (now - q.ts) / 1000;
+    ctx.globalAlpha = 0.35 + 0.55 * Math.max(0, 1 - (now - q.ts) / (mins * 60000));
+    ctx.fillStyle = col;
+    // shadowBlur is expensive on canvas 2D: only the large orders glow
+    if (q.notional >= 1e5) { ctx.shadowColor = col; ctx.shadowBlur = 12; } else ctx.shadowBlur = 0;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    if (age < 4) {
+      ctx.globalAlpha = 1 - age / 4; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, r + age * 6, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1;
+    }
+  }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.textAlign = 'left';
+  if (!liqs.length || liqs[0].ts < t0) { ctx.fillStyle = C.dim; ctx.textAlign = 'center'; ctx.fillText(labels.empty, padL + plotW / 2, padT + plotH / 2); ctx.textAlign = 'left'; }
+}

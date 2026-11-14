@@ -1,7 +1,7 @@
 import { t, setLang, getLang, onLang, applyDom } from './i18n.js';
 import { rest, GateWS, SPOT_WS, PERP_WS } from './gate.js';
 import * as F from './fmt.js';
-import { C, drawCandles, drawSpark, drawBars, drawBasis, drawFlow, drawDist } from './charts.js';
+import { C, drawCandles, drawSpark, drawBars, drawBasis, drawFlow, drawDist, drawLiqMap } from './charts.js';
 import { createShell } from './shell3d.js';
 import { createFunnel } from './funnel.js';
 import { createPulse } from './pulse3d.js';
@@ -55,6 +55,7 @@ const S = {
   conn: { rest: '', spot: '', fut: '' },
   ver: { tape: 0, whales: 0, liqs: 0, dv: 0 },
   top: [], dist: [], median: NaN, dv: null, fundInterval: new Map(),
+  liqAll: [], liqStats: null, // market-wide liquidations, newest first (last ~65 min)
 };
 let spotWS, futWS, shell, funnel, pulse, heat, picker, selToken = 0;
 const inputs = [];
@@ -321,14 +322,55 @@ function onFut(m) {
         // a negative order size is a forced sell, i.e. a long position being liquidated
         const side = size < 0 ? 'long' : 'short';
         S.liqSeen[side] += notional;
-        S.liqs.unshift({ ts: +x.time, pair: x.contract, side, px, notional });
-        if (S.liqs.length > 8) S.liqs.length = 8;
-        S.ver.liqs++;
+        addLiq({ ts: +x.time, pair: x.contract, side, px, notional });
         if (x.contract === S.sel) funnel && funnel.liq(px, notional, side);
         shell && shell.pulse(x.contract, Math.min(1.2, 0.3 + Math.log10(Math.max(1, notional)) / 8));
       }
       break;
   }
+}
+
+// ---------------------------------------------------------------- liquidations
+function addLiq(q) {
+  S.liqAll.unshift(q);
+  const cut = Date.now() + S.offset - 65 * 60000;
+  while (S.liqAll.length && (S.liqAll.length > 4000 || S.liqAll[S.liqAll.length - 1].ts < cut)) S.liqAll.pop();
+  S.ver.liqs++;
+}
+
+// The live channel only pushes new events, so a quiet market would show an
+// empty panel; seed the last ~hour from REST (newest 1000 orders) first.
+async function seedLiqs() {
+  try {
+    const arr = await rest('/futures/usdt/liq_orders', { limit: 1000 });
+    const seeded = [];
+    for (const x of arr) {
+      const q = S.futAll.get(x.contract)?.q || 0, px = +x.fill_price || +x.order_price;
+      const notional = Math.abs(+x.size) * q * px;
+      if (!notional) continue;
+      // order_size < 0 is the forced sell that closes a long
+      seeded.push({ ts: x.time * 1000, pair: x.contract, side: +x.order_size < 0 ? 'long' : 'short', px, notional });
+    }
+    const newestLive = S.liqAll.length ? S.liqAll[S.liqAll.length - 1].ts : Infinity;
+    S.liqAll = S.liqAll.concat(seeded.filter((q) => q.ts < newestLive).sort((a, b) => b.ts - a.ts));
+    S.ver.liqs++;
+  } catch (e) { /* live feed only */ }
+}
+
+function liqStats() {
+  const cut = Date.now() + S.offset - 3600000;
+  let long = 0, short = 0, nl = 0, ns = 0, max = null;
+  const by = new Map();
+  for (const q of S.liqAll) {
+    if (q.ts < cut) break;
+    if (q.side === 'long') { long += q.notional; nl++; } else { short += q.notional; ns++; }
+    if (!max || q.notional > max.notional) max = q;
+    const b = by.get(q.pair) || { pair: q.pair, l: 0, s: 0 };
+    if (q.side === 'long') b.l += q.notional; else b.s += q.notional;
+    by.set(q.pair, b);
+  }
+  const top = [...by.values()].sort((a, b) => b.l + b.s - (a.l + a.s)).slice(0, 8);
+  S.liqStats = { long, short, nl, ns, max, top };
 }
 
 function onTrade(mkt, pair, side, price, amount, ts) {
@@ -671,7 +713,7 @@ function renderFunnelPanel() {
   }
   if (liqVer !== S.ver.liqs) {
     liqVer = S.ver.liqs;
-    $('liq-list').innerHTML = `<div class="lh">${F.esc(t('fn.liq.head'))}</div>` + S.liqs.slice(0, 5).map((x) =>
+    $('liq-list').innerHTML = `<div class="lh">${F.esc(t('fn.liq.head'))}</div>` + S.liqAll.slice(0, 5).map((x) =>
       `<div class="lq"><span class="${x.side === 'long' ? 'dn' : 'up'}">${F.esc(F.base(x.pair))} ${F.esc(t(x.side === 'long' ? 'fn.liq.long' : 'fn.liq.short'))}</span> <em>${F.usd(x.notional)}</em> @ ${F.price(x.px)}</div>`).join('');
   }
 }
@@ -689,6 +731,36 @@ function renderMarquees() {
     fund: fm && Number.isFinite(fm.funding) ? (fm.funding * 100).toFixed(4) + '%' : '—',
     liq: F.usd(S.liqSeen.long + S.liqSeen.short), wh: S.whaleCount,
   }))}</span>`;
+}
+
+let lqVer = -1;
+function renderLiq() {
+  const st = S.liqStats;
+  if (st) {
+    setText('lq-stat', t('lq.stat', { n: F.num(st.nl + st.ns) }));
+    setText('lq-long', F.usd(st.long));
+    setText('lq-short', F.usd(st.short));
+    setText('lq-long-n', t('lq.n', { n: F.num(st.nl) }));
+    setText('lq-short-n', t('lq.n', { n: F.num(st.ns) }));
+    setText('lq-max', st.max ? F.usd(st.max.notional) : '—', st.max ? (st.max.side === 'long' ? 'dn' : 'up') : '');
+    setText('lq-max-s', st.max ? `${F.base(st.max.pair)} · ${t(st.max.side === 'long' ? 'fn.liq.long' : 'fn.liq.short')} · ${F.hms(st.max.ts)}` : '—');
+    const tot = st.long + st.short;
+    setText('lq-ratio', tot ? `${((st.long / tot) * 100).toFixed(0)}% / ${((st.short / tot) * 100).toFixed(0)}%` : '—');
+    $('lq-split-l').style.width = tot ? (st.long / tot) * 100 + '%' : '50%';
+    $('lq-split-s').style.width = tot ? (st.short / tot) * 100 + '%' : '50%';
+    const mx = st.top[0] ? st.top[0].l + st.top[0].s : 1;
+    $('lq-top').innerHTML = st.top.map((b) => `<div class="dv-row lq-row" data-pair="${F.esc(b.pair)}">` +
+      `<i class="bar-r" style="width:${((b.l / mx) * 100).toFixed(1)}%"></i><i class="bar-g" style="left:${((b.l / mx) * 100).toFixed(1)}%;width:${((b.s / mx) * 100).toFixed(1)}%"></i>` +
+      `<span class="dv-b">${F.esc(F.base(b.pair))}</span><span>${F.usd(b.l + b.s)}</span><span><em class="dn">${F.usd(b.l, 0)}</em> / <em class="up">${F.usd(b.s, 0)}</em></span></div>`).join('');
+  }
+  if (lqVer === S.ver.liqs) return;
+  lqVer = S.ver.liqs;
+  const fresh = Date.now() + S.offset - 5000;
+  $('lq-feed').innerHTML = S.liqAll.slice(0, 10).map((q) => `<div class="lq-item${q.ts > fresh ? ' new' : ''}">` +
+    `<span class="ts">${F.hms(q.ts)}</span><b>${F.esc(F.base(q.pair))}</b>` +
+    `<span class="lq-tag ${q.side === 'long' ? 'dn' : 'up'}">${F.esc(t(q.side === 'long' ? 'fn.liq.long' : 'fn.liq.short'))}</span>` +
+    `<em>${F.usd(q.notional)}</em><span class="px">@ ${F.price(q.px)}</span></div>`).join('') ||
+    `<div class="wc-s">${F.esc(t('lq.empty'))}</div>`;
 }
 
 let dvVer = -1;
@@ -732,7 +804,7 @@ function pickerRows(sort, q) {
   else if (sort === 'dn') arr = arr.filter((r) => r.qv >= 100_000).sort((a, b) => a.chg - b.chg);
   else arr.sort((a, b) => b.qv - a.qv);
   if (q) arr.sort((a, b) => (b.base === q) - (a.base === q) || b.base.startsWith(q) - a.base.startsWith(q));
-  return arr.slice(0, 120).map((r) => ({ ...r, perp: S.futAll.has(r.pair) }));
+  return { total: arr.length, rows: arr.slice(0, 150).map((r) => ({ ...r, perp: S.futAll.has(r.pair) })) };
 }
 
 async function loadFundingIntervals() {
@@ -755,6 +827,7 @@ function render() {
   renderTape();
   renderFunnelPanel();
   renderDeriv();
+  renderLiq();
   renderHeatHeader();
   setText('sh-count', t('sh.count', { n: shell ? shell.count() : 0 }));
   $('shell-wait').classList.toggle('hide', !!(shell && shell.count()));
@@ -778,9 +851,14 @@ function showTip(tip, wrap, sym, x, y) {
 }
 
 // ---------------------------------------------------------------- main loop
+let lastLiqDraw = 0;
 function loop(now) {
   pulse && pulse.frame(now);
   heat && heat.draw(now);
+  if (now - lastLiqDraw > 250) {
+    lastLiqDraw = now;
+    drawLiqMap($('cv-liq'), S.liqAll, Date.now() + S.offset, { now: t('fn.now'), empty: t('lq.empty') });
+  }
   if (shell) {
     const wires = inputs.map((c) => {
       const sym = c.sym || S.sel;
@@ -804,7 +882,7 @@ function loop(now) {
 async function boot() {
   applyDom();
   $('lang-btn').addEventListener('click', () => setLang(getLang() === 'zh' ? 'en' : 'zh'));
-  onLang(() => { whalesVer = -1; tapeVer = -1; liqVer = -1; dvVer = -1; $('whales').innerHTML = ''; render(); renderMarquees(); });
+  onLang(() => { whalesVer = -1; tapeVer = -1; liqVer = -1; dvVer = -1; lqVer = -1; $('whales').innerHTML = ''; render(); renderMarquees(); });
   buildInputs();
   funnel = createFunnel($('cv-funnel'));
   heat = createHeatmap($('cv-heat'), { onPick: selectSymbol, onHover: onHeatHover });
@@ -818,7 +896,11 @@ async function boot() {
   } catch (e) {
     pulse = null;
   }
-  picker = createPicker($('picker'), { getRows: pickerRows, getSel: () => S.sel, onPick: selectSymbol });
+  picker = createPicker($('picker'), { getRows: pickerRows, getRec: (p) => S.spotAll.get(p), getSel: () => S.sel, onPick: selectSymbol });
+  document.querySelector('.a-lq').addEventListener('click', (e) => {
+    const row = e.target.closest('.lq-row');
+    if (row) selectSymbol(row.dataset.pair);
+  });
   document.querySelector('.a-dv').addEventListener('click', (e) => {
     const row = e.target.closest('.dv-row');
     if (row) selectSymbol(row.dataset.pair);
@@ -832,6 +914,7 @@ async function boot() {
   requestAnimationFrame(loop);
   setInterval(perSecond, 1000);
   setInterval(calibrateClock, 5000);
+  setInterval(liqStats, 1000);
   setInterval(flushOrders, 250);
   setInterval(render, 250);
 
@@ -851,6 +934,7 @@ async function boot() {
   shell && shell.setClusters(clusterList());
   sh_note();
   connectWS();
+  seedLiqs();
   await selectSymbol(S.sel);
   renderMarquees();
 
