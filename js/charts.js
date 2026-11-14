@@ -153,3 +153,24 @@ export function drawFlow(cv, buckets) {
     ctx.fillStyle = hexA(C.red, 0.8); ctx.fillRect(i * bw + 1, mid + 1, bw - 2, dn);
   });
 }
+
+/** bins: [{label, n, sign}] — 24h change distribution across pairs */
+export function drawDist(cv, bins) {
+  const { ctx, w, h } = fitCanvas(cv);
+  if (!bins.length) return;
+  const max = Math.max(1, ...bins.map((b) => b.n));
+  const labH = 12, cntH = 11, ph = h - labH - cntH, bw = w / bins.length;
+  ctx.font = FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  bins.forEach((b, i) => {
+    const bh = Math.max(1, (b.n / max) * ph), x = i * bw;
+    const col = b.sign > 0 ? C.green : b.sign < 0 ? C.red : C.dim;
+    const g = ctx.createLinearGradient(0, h - labH - bh, 0, h - labH);
+    g.addColorStop(0, hexA(col, 0.95)); g.addColorStop(1, hexA(col, 0.25));
+    ctx.fillStyle = g; ctx.shadowColor = col; ctx.shadowBlur = 6;
+    ctx.fillRect(x + 2, h - labH - bh, bw - 4, bh);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = C.white; ctx.fillText(String(b.n), x + bw / 2, h - labH - bh - cntH);
+    ctx.fillStyle = C.dim2; ctx.fillText(b.label, x + bw / 2, h - labH + 2);
+  });
+  ctx.textAlign = 'left';
+}

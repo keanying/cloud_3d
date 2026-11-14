@@ -1,9 +1,12 @@
 import { t, setLang, getLang, onLang, applyDom } from './i18n.js';
 import { rest, GateWS, SPOT_WS, PERP_WS } from './gate.js';
 import * as F from './fmt.js';
-import { C, drawCandles, drawSpark, drawBars, drawBasis, drawFlow } from './charts.js';
+import { C, drawCandles, drawSpark, drawBars, drawBasis, drawFlow, drawDist } from './charts.js';
 import { createShell } from './shell3d.js';
 import { createFunnel } from './funnel.js';
+import { createPulse } from './pulse3d.js';
+import { createHeatmap } from './heatmap.js';
+import { createPicker } from './picker.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -17,6 +20,12 @@ const TRADE_N = 16;     // coins whose spot trades are streamed
 const PERP_N = 10;      // perps whose tickers + trades are streamed
 const SPOT_WHALE = 10_000;
 const PERP_WHALE = 50_000;
+const HEAT_N = 60;      // tiles on the heatmap
+const PULSE_N = 64;     // bars on the header ring
+const DIST_BINS = [
+  [-Infinity, -20, '≤-20'], [-20, -10, '-20'], [-10, -5, '-10'], [-5, -2, '-5'], [-2, 0, '-2'],
+  [0, 2, '0'], [2, 5, '+2'], [5, 10, '+5'], [10, 20, '+10'], [20, Infinity, '≥20'],
+];
 const INPUTS = [
   { kind: 'coin', sym: 'BTC_USDT', color: C.cyan },
   { kind: 'coin', sym: 'ETH_USDT', color: C.blue },
@@ -44,9 +53,10 @@ const S = {
   lat: { spot: NaN, fut: NaN },
   wire: [], frames: 0, framesPrev: 0, fps: 0,
   conn: { rest: '', spot: '', fut: '' },
-  ver: { tape: 0, whales: 0, liqs: 0 },
+  ver: { tape: 0, whales: 0, liqs: 0, dv: 0 },
+  top: [], dist: [], median: NaN, dv: null, fundInterval: new Map(),
 };
-let spotWS, futWS, shell, funnel, selToken = 0;
+let spotWS, futWS, shell, funnel, pulse, heat, picker, selToken = 0;
 const inputs = [];
 
 // ---------------------------------------------------------------- REST pollers
@@ -70,6 +80,14 @@ async function pollSpotAll() {
     }
     movers.sort((a, b) => b.chg - a.chg);
     S.mk = { vol, up, dn, n, avg: sum / n, wavg: wsum / vol, gainers: movers.slice(0, 8), losers: movers.slice(-8).reverse() };
+    const live = [...S.spotAll.values()].filter((r) => !STABLE.has(r.base) && !LEVERAGED.test(r.base) && r.last > 0 && r.qv > 0);
+    S.dist = DIST_BINS.map(([lo, hi, label]) => ({ label, sign: lo >= 0 ? 1 : -1, n: live.filter((r) => r.chg > lo && r.chg <= hi || (lo === 0 && r.chg === 0)).length }));
+    S.dist[4].n = live.filter((r) => r.chg > -2 && r.chg < 0).length;
+    const chgs = live.map((r) => r.chg).sort((a, b) => a - b);
+    S.median = chgs.length ? chgs[chgs.length >> 1] : NaN;
+    S.top = live.sort((a, b) => b.qv - a.qv);
+    pulse && pulse.setData(S.top.slice(0, PULSE_N).map((r) => ({ sym: r.pair, label: r.base, chg: r.chg })), up / Math.max(1, up + dn));
+    heat && heat.setData(S.top.slice(0, HEAT_N).map((r) => ({ sym: r.pair, rec: r })));
     if (S.focus.length) shell && shell.setClusters(clusterList());
   } catch (e) {
     S.conn.rest = 'closed';
@@ -93,6 +111,16 @@ async function pollFutAll() {
       vol += rec.vol;
     }
     S.fm = { oi, vol, funding: oi ? fw / oi : NaN, n: arr.length };
+    const recs = [...S.futAll.values()].filter((r) => Number.isFinite(r.oi) && Number.isFinite(r.funding));
+    const liquid = recs.filter((r) => r.oi >= 1_000_000);
+    S.dv = {
+      oiTop: liquid.slice().sort((a, b) => b.oi - a.oi).slice(0, 12),
+      fHi: liquid.slice().sort((a, b) => b.funding - a.funding).slice(0, 6),
+      fLo: liquid.slice().sort((a, b) => a.funding - b.funding).slice(0, 6),
+      pos: recs.filter((r) => r.funding > 0).length,
+      neg: recs.filter((r) => r.funding < 0).length,
+    };
+    S.ver.dv++;
   } catch (e) {
     S.conn.rest = 'closed';
   }
@@ -180,12 +208,8 @@ async function selectSymbol(sym) {
   }
   selSubs(sym, true);
   document.querySelectorAll('.sym-name').forEach((el) => { el.textContent = F.base(sym); });
-  const sel = $('sym-select');
-  if (sel.value !== sym) {
-    if (![...sel.options].some((o) => o.value === sym)) sel.add(new Option(F.base(sym), sym));
-    sel.value = sym;
-  }
   shell && shell.setSelected(sym);
+  heat && heat.setSelected(sym);
   try {
     const raw = await rest('/spot/candlesticks', { currency_pair: sym, interval: '1m', limit: 120 });
     if (token !== selToken) return;
@@ -202,13 +226,32 @@ async function selectSymbol(sym) {
 // Only trade / book channels are used: Gate batches ticker pushes (~0.5 s).
 const LAT_CH = /\.(trades|order_book|book_ticker)$/;
 const latBuf = { spot: [], fut: [] };
+const skew = []; // server push time − local receive time
 function latency(kind, m) {
   if (!m.time_ms || m.event !== 'update' || !LAT_CH.test(m.channel)) return;
+  const now = Date.now();
+  skew.push(m.time_ms - now);
+  if (skew.length > 300) skew.shift();
   const b = latBuf[kind];
-  b.push(Date.now() + S.offset - m.time_ms);
+  b.push(now + S.offset - m.time_ms);
   if (b.length > 61) b.shift();
   const sorted = b.slice().sort((x, y) => x - y);
   S.lat[kind] = sorted[sorted.length >> 1];
+}
+
+// The one-off /spot/time calibration can fail or be skewed by a slow proxy, and
+// some machines' clocks are hours off. Every frame carries the server push time,
+// so max(time_ms − now) ≈ true offset − fastest latency: if that disagrees with
+// the current offset by more than 2 s, trust it instead.
+function calibrateClock() {
+  if (skew.length < 30) return;
+  let best = -Infinity;
+  for (const v of skew) if (v > best) best = v;
+  if (Math.abs(best - S.offset) > 2000) {
+    S.offset = best;
+    latBuf.spot.length = 0; latBuf.fut.length = 0;
+    S.lat.spot = NaN; S.lat.fut = NaN;
+  }
 }
 
 function onSpot(m) {
@@ -223,6 +266,7 @@ function onSpot(m) {
       if (!rec) return;
       Object.assign(rec, { last: +r.last, chg: +r.change_percentage, qv: +r.quote_volume, high: +r.high_24h, low: +r.low_24h });
       shell && shell.updateTicker(r.currency_pair, rec.chg, rec.last);
+      pulse && pulse.update(r.currency_pair, rec.chg);
       break;
     }
     case 'spot.trades':
@@ -304,7 +348,9 @@ function onTrade(mkt, pair, side, price, amount, ts) {
   const agg = pending.get(key);
   if (agg) { agg.notional += notional; agg.amount += amount; agg.price = price; }
   else pending.set(key, { mkt, pair, side, price, amount, notional, ts });
-  shell && shell.pulse(pair, Math.min(0.25, 0.03 + (notional / (mkt === 'spot' ? SPOT_WHALE : PERP_WHALE)) * 0.3));
+  const k = notional / (mkt === 'spot' ? SPOT_WHALE : PERP_WHALE);
+  shell && shell.pulse(pair, Math.min(0.25, 0.03 + k * 0.3));
+  heat && heat.flash(pair, Math.min(0.5, 0.05 + k * 0.4));
 }
 
 const pending = new Map();
@@ -317,6 +363,8 @@ function flushOrders() {
     if (S.whales.length > 14) S.whales.length = 14;
     S.ver.whales++;
     shell && shell.pulse(o.pair, Math.min(1.4, 0.6 + Math.log10(o.notional / th)));
+    heat && heat.flash(o.pair, 1);
+    pulse && pulse.bump(o.pair, Math.min(1.5, 0.6 + Math.log10(o.notional / th)));
   }
   pending.clear();
 }
@@ -327,7 +375,7 @@ function sysWire(kind, status) {
 }
 function pushWire(e) {
   S.wire.unshift(e);
-  if (S.wire.length > 30) S.wire.length = 30;
+  if (S.wire.length > 60) S.wire.length = 60;
 }
 function wireLog(kind, m) {
   const ch = m.channel || '';
@@ -443,6 +491,10 @@ function renderHeader() {
     setText('h-vol', F.usd(S.mk.vol));
   }
   if (S.fm) setText('h-oi', F.usd(S.fm.oi));
+  setText('pk-sym', F.base(S.sel));
+  setText('pk-px', rec ? F.price(rec.last) : '—');
+  setText('pk-chg', rec ? F.pct(rec.chg) : '—', rec ? F.cls(rec.chg) : '');
+  if (S.mk) setText('pl-stat', t('pl.stat', { up: S.mk.up, dn: S.mk.dn }));
   for (const k of ['rest', 'spot', 'fut']) $('c-' + k).className = S.conn[k] || '';
 }
 
@@ -461,6 +513,8 @@ function renderOverview() {
     const g = mk.gainers[0], l = mk.losers[0];
     setText('ov-gainer', g ? `${g.base} ${F.pct(g.chg)}` : '—');
     setText('ov-loser', l ? `${l.base} ${F.pct(l.chg)}` : '—');
+    setText('ov-median', t('ov.median', { v: F.pct(S.median) }), F.cls(S.median));
+    drawDist($('cv-dist'), S.dist);
   }
   if (fm) {
     setText('ov-oi', F.usd(fm.oi));
@@ -474,8 +528,10 @@ function renderBook() {
   if (!bk || !bk.bids.length || !bk.asks.length) return;
   const ba = bk.asks[0][0], bb = bk.bids[0][0], spread = ba - bb, mid = (ba + bb) / 2;
   setText('ld-spread', t('ld.spread', { v: F.price(spread, F.priceDigits(mid)) }));
-  // ladder: 5 / 5
-  const a5 = bk.asks.slice(0, 5).reverse(), b5 = bk.bids.slice(0, 5);
+  // ladder: as many levels per side as fit the panel
+  const lw = document.querySelector('.ladder-wrap');
+  const lv = Math.max(3, Math.min(10, Math.floor((lw.clientHeight - 16 - 24) / 2 / 16)));
+  const a5 = bk.asks.slice(0, lv).reverse(), b5 = bk.bids.slice(0, lv);
   const m5 = Math.max(...a5.map((x) => x[1]), ...b5.map((x) => x[1]));
   const row = (x, c, m) => `<div class="lr ${c}"><i style="width:${((x[1] / m) * 100).toFixed(1)}%"></i><span>${F.price(x[0])}</span><span>${F.amt(x[1])}</span></div>`;
   $('ladder').innerHTML = a5.map((x) => row(x, 'a', m5)).join('') + `<div class="mid">${F.price(mid)}</div>` + b5.map((x) => row(x, 'b', m5)).join('');
@@ -504,8 +560,9 @@ function renderSpot() {
 
 function renderBasis() {
   const fu = S.futAll.get(S.sel), lb = S.basis[S.basis.length - 1];
-  setText('bs-lat-s', Number.isFinite(S.lat.spot) ? Math.round(S.lat.spot) + ' ms' : '—');
-  setText('bs-lat-f', Number.isFinite(S.lat.fut) ? Math.round(S.lat.fut) + ' ms' : '—');
+  const ms = (v) => (Number.isFinite(v) && Math.abs(v) < 60000 ? Math.max(0, Math.round(v)) + ' ms' : '—');
+  setText('bs-lat-s', ms(S.lat.spot));
+  setText('bs-lat-f', ms(S.lat.fut));
   setText('bs-basis', lb && Number.isFinite(lb.bps) ? F.bps(lb.bps) + ' bp' : '—', lb ? F.cls(lb.bps) : '');
   setText('bs-prem', lb && Number.isFinite(lb.prem) ? F.bps(lb.prem) + ' bp' : '—', lb ? F.cls(lb.prem) : '');
   setText('bs-mark', fu && fu.mark ? F.price(fu.mark) : '—');
@@ -514,7 +571,8 @@ function renderBasis() {
 }
 
 function renderWire() {
-  $('wire').innerHTML = S.wire.slice(0, 13).map((e) =>
+  const rowsFit = Math.max(6, Math.floor($('wire').clientHeight / 15));
+  $('wire').innerHTML = S.wire.slice(0, rowsFit).map((e) =>
     `<div class="wr${e.hl ? ' hl' : ''}"><span class="ts">${F.hmsms(e.ts)}</span><span class="${e.cls}">${F.esc(e.ch)}</span><span>${F.esc(e.txt)}</span></div>`).join('');
   setText('wi-rate', S.fps + ' msg/s');
   setText('wi-total', F.num(S.frames));
@@ -633,12 +691,56 @@ function renderMarquees() {
   }))}</span>`;
 }
 
-function buildSelect() {
-  const sel = $('sym-select');
-  sel.innerHTML = '';
-  for (const p of S.focus) sel.add(new Option(F.base(p), p));
-  sel.value = S.sel;
-  sel.onchange = () => selectSymbol(sel.value);
+let dvVer = -1;
+function renderDeriv() {
+  const fm = S.fm, dv = S.dv;
+  if (!fm || !dv) return;
+  setText('dv-count', t('dv.count', { n: fm.n }));
+  setText('dv-oi-t', F.usd(fm.oi));
+  setText('dv-vol-t', F.usd(fm.vol));
+  setText('dv-pos', String(dv.pos));
+  setText('dv-neg', String(dv.neg));
+  if (dvVer === S.ver.dv) return;
+  dvVer = S.ver.dv;
+  const maxOi = dv.oiTop[0]?.oi || 1;
+  const row = (r, cols, w, cl) => `<div class="dv-row${r.contract === S.sel ? ' sel' : ''}" data-pair="${F.esc(r.contract)}">` +
+    `<i class="${cl}" style="width:${(w * 100).toFixed(1)}%"></i><span class="dv-b">${F.esc(F.base(r.contract))}</span>${cols}</div>`;
+  $('dv-oi').innerHTML = dv.oiTop.map((r, i) => row(r,
+    `<span>${F.usd(r.oi)}</span><span class="${F.cls(r.chg)}">${F.pct(r.chg)}</span>`, r.oi / maxOi, 'bar-c')).join('');
+  const apr = (r) => r.funding * (365 * 86400 / (S.fundInterval.get(r.contract) || 28800)) * 100;
+  const maxF = Math.max(1e-9, ...dv.fHi.concat(dv.fLo).map((r) => Math.abs(r.funding)));
+  const frow = (r) => row(r, `<span class="${F.cls(r.funding)}">${(r.funding * 100).toFixed(4)}%</span><span class="${F.cls(r.funding)}">${apr(r).toFixed(1)}%</span>`,
+    Math.abs(r.funding) / maxF, r.funding >= 0 ? 'bar-g' : 'bar-r');
+  $('dv-fhi').innerHTML = dv.fHi.map(frow).join('');
+  $('dv-flo').innerHTML = dv.fLo.map(frow).join('');
+}
+
+function renderHeatHeader() {
+  const top = S.top.slice(0, HEAT_N);
+  if (!top.length) return;
+  setText('hm-note', t('hm.note', { n: top.length }));
+  setText('hm-stat', t('hm.stat', { up: top.filter((r) => r.chg > 0).length, dn: top.filter((r) => r.chg < 0).length }));
+}
+
+function pickerRows(sort, q) {
+  let arr = [...S.spotAll.values()].filter((r) => r.last > 0 && r.qv > 0);
+  // searching shows stablecoins too; leveraged tokens (BTC3L…) only when the query has a digit
+  arr = q ? arr.filter((r) => r.base.includes(q) && (/\d/.test(q) || !LEVERAGED.test(r.base)))
+    : arr.filter((r) => !STABLE.has(r.base) && !LEVERAGED.test(r.base));
+  if (sort === 'perp') arr = arr.filter((r) => S.futAll.has(r.pair));
+  if (sort === 'up') arr = arr.filter((r) => r.qv >= 100_000).sort((a, b) => b.chg - a.chg);
+  else if (sort === 'dn') arr = arr.filter((r) => r.qv >= 100_000).sort((a, b) => a.chg - b.chg);
+  else arr.sort((a, b) => b.qv - a.qv);
+  if (q) arr.sort((a, b) => (b.base === q) - (a.base === q) || b.base.startsWith(q) - a.base.startsWith(q));
+  return arr.slice(0, 120).map((r) => ({ ...r, perp: S.futAll.has(r.pair) }));
+}
+
+async function loadFundingIntervals() {
+  try {
+    const arr = await rest('/futures/usdt/contracts');
+    for (const c of arr) if (c.funding_interval) S.fundInterval.set(c.name, +c.funding_interval);
+    S.ver.dv++;
+  } catch (e) { /* assume 8h */ }
 }
 
 function render() {
@@ -652,13 +754,16 @@ function render() {
   renderWhales();
   renderTape();
   renderFunnelPanel();
+  renderDeriv();
+  renderHeatHeader();
   setText('sh-count', t('sh.count', { n: shell ? shell.count() : 0 }));
   $('shell-wait').classList.toggle('hide', !!(shell && shell.count()));
 }
 
 // ---------------------------------------------------------------- tooltip
-function onHover(sym, x, y) {
-  const tip = $('shell-tip');
+const onHover = (sym, x, y) => showTip($('shell-tip'), $('shell-wrap'), sym, x, y);
+const onHeatHover = (sym, x, y) => showTip($('hm-tip'), document.querySelector('.hm-wrap'), sym, x, y);
+function showTip(tip, wrap, sym, x, y) {
   if (!sym) { tip.style.display = 'none'; return; }
   const r = S.spotAll.get(sym), fu = S.futAll.get(sym);
   if (!r) return;
@@ -668,13 +773,14 @@ function onHover(sym, x, y) {
     `<div class="tt-r"><span>${F.esc(t('sh.tip.vol'))}</span><b>${F.usd(r.qv)}</b></div>` +
     (fu ? `<div class="tt-r"><span>${F.esc(t('sh.tip.perp'))}</span><b class="${F.cls(fu.funding)}">${(fu.funding * 100).toFixed(4)}%</b></div>` : '');
   tip.style.display = 'block';
-  const wrap = $('shell-wrap');
   tip.style.left = Math.min(x + 14, wrap.clientWidth - tip.offsetWidth - 6) + 'px';
   tip.style.top = Math.min(y + 14, wrap.clientHeight - tip.offsetHeight - 6) + 'px';
 }
 
 // ---------------------------------------------------------------- main loop
 function loop(now) {
+  pulse && pulse.frame(now);
+  heat && heat.draw(now);
   if (shell) {
     const wires = inputs.map((c) => {
       const sym = c.sym || S.sel;
@@ -698,9 +804,25 @@ function loop(now) {
 async function boot() {
   applyDom();
   $('lang-btn').addEventListener('click', () => setLang(getLang() === 'zh' ? 'en' : 'zh'));
-  onLang(() => { whalesVer = -1; tapeVer = -1; liqVer = -1; $('whales').innerHTML = ''; render(); renderMarquees(); });
+  onLang(() => { whalesVer = -1; tapeVer = -1; liqVer = -1; dvVer = -1; $('whales').innerHTML = ''; render(); renderMarquees(); });
   buildInputs();
   funnel = createFunnel($('cv-funnel'));
+  heat = createHeatmap($('cv-heat'), { onPick: selectSymbol, onHover: onHeatHover });
+  try {
+    pulse = createPulse($('cv-pulse'), {
+      onPick: selectSymbol,
+      onFocus: (it) => {
+        $('pl-focus').innerHTML = it ? `${F.esc(it.label)} <span class="${F.cls(it.chg)}">${F.pct(it.chg)}</span>` : '';
+      },
+    });
+  } catch (e) {
+    pulse = null;
+  }
+  picker = createPicker($('picker'), { getRows: pickerRows, getSel: () => S.sel, onPick: selectSymbol });
+  document.querySelector('.a-dv').addEventListener('click', (e) => {
+    const row = e.target.closest('.dv-row');
+    if (row) selectSymbol(row.dataset.pair);
+  });
   try {
     shell = createShell($('shell-wrap'), { onPick: selectSymbol, onHover });
   } catch (e) {
@@ -709,6 +831,7 @@ async function boot() {
   }
   requestAnimationFrame(loop);
   setInterval(perSecond, 1000);
+  setInterval(calibrateClock, 5000);
   setInterval(flushOrders, 250);
   setInterval(render, 250);
 
@@ -725,13 +848,13 @@ async function boot() {
     if (!S.spotAll.size) await new Promise((res) => setTimeout(res, 5000));
   }
   computeFocus();
-  buildSelect();
   shell && shell.setClusters(clusterList());
   sh_note();
   connectWS();
   await selectSymbol(S.sel);
   renderMarquees();
 
+  loadFundingIntervals();
   setInterval(pollSpotAll, 15000);
   setInterval(pollFutAll, 30000);
   setInterval(() => pollSelPerp(selToken), 60000);

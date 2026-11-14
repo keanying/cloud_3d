@@ -11,13 +11,10 @@
 <body>
 
 <header class="topbar">
-  <div class="brand">
-    <div class="logo">C3</div>
-    <div class="brand-txt">
-      <div class="brand-sub"><span class="live-dot"></span><span data-i18n="brand.tag"></span></div>
-      <div class="brand-title">CLOUD_3D <span class="sl">//</span> <span data-i18n="brand.title"></span></div>
-      <div class="brand-sub2" data-i18n="brand.sub"></div>
-    </div>
+  <div class="pulse" id="pulse">
+    <canvas id="cv-pulse"></canvas>
+    <div class="pulse-cap"><span data-i18n="pl.title"></span><b id="pl-stat"></b></div>
+    <div class="pulse-focus" id="pl-focus"></div>
   </div>
   <div class="hstats">
     <div class="hstat"><label id="h-sym">BTC</label><b id="h-price">—</b></div>
@@ -29,7 +26,16 @@
   <div class="hright">
     <div class="clock" id="clock">--:--:-- UTC</div>
     <div class="hctl">
-      <select id="sym-select" aria-label="symbol"></select>
+      <div class="picker" id="picker">
+        <button class="pk-btn" type="button" aria-haspopup="listbox"><span class="pk-sym" id="pk-sym">BTC</span><span class="pk-px" id="pk-px">—</span><span class="pk-chg" id="pk-chg">—</span><span class="pk-caret">▾</span></button>
+        <div class="pk-pop" hidden>
+          <div class="pk-search"><span class="pk-ico">⌕</span><input class="pk-q" type="text" autocomplete="off" spellcheck="false" aria-label="search"><kbd>/</kbd></div>
+          <div class="pk-tabs"><button type="button" data-s="vol" class="on" data-i18n="pk.vol"></button><button type="button" data-s="up" data-i18n="pk.up"></button><button type="button" data-s="dn" data-i18n="pk.dn"></button><button type="button" data-s="perp" data-i18n="pk.perp"></button></div>
+          <div class="pk-head"><span data-i18n="pk.coin"></span><span data-i18n="pk.price"></span><span data-i18n="pk.chg"></span><span data-i18n="pk.qv"></span></div>
+          <div class="pk-list" role="listbox"></div>
+          <div class="pk-foot" data-i18n="pk.hint"></div>
+        </div>
+      </div>
       <div class="conn"><i id="c-rest"></i>REST<i id="c-spot"></i>SPOT<i id="c-fut"></i>PERP</div>
       <button id="lang-btn" class="lang" type="button" aria-label="language"><span data-l="zh">中</span><span class="sep">/</span><span data-l="en">EN</span></button>
     </div>
@@ -65,6 +71,8 @@
         <div><label data-i18n="ov.gainer"></label><b class="up" id="ov-gainer">—</b></div>
         <div><label data-i18n="ov.loser"></label><b class="dn" id="ov-loser">—</b></div>
       </div>
+      <div class="dist-h"><span data-i18n="ov.dist"></span><b id="ov-median">—</b></div>
+      <canvas class="cv-dist" id="cv-dist"></canvas>
     </div>
     <div class="ph sub"><span class="pt" data-i18n="ld.title"></span><span class="sym-name">BTC</span><span class="ptag" id="ld-spread">—</span></div>
     <div class="pb ladder-wrap">
@@ -134,6 +142,39 @@
       <div class="shell-foot" data-i18n="sh.legend"></div>
       <div class="shell-tip" id="shell-tip"></div>
       <div class="shell-wait" id="shell-wait" data-i18n="sh.wait"></div>
+    </div>
+  </section>
+
+  <!-- ===== Market heatmap ===== -->
+  <section class="panel a-hm">
+    <div class="ph"><span class="pt" data-i18n="hm.title"></span><span class="ph-note" id="hm-note"></span><span class="ptag" id="hm-stat">—</span></div>
+    <div class="hm-wrap">
+      <canvas class="cv-heat" id="cv-heat"></canvas>
+      <div class="shell-tip" id="hm-tip"></div>
+    </div>
+    <div class="hm-legend"><span>≤ -8%</span><i class="hm-scale"></i><span>≥ +8%</span></div>
+  </section>
+
+  <!-- ===== Perpetual rankings ===== -->
+  <section class="panel a-dv">
+    <div class="ph"><span class="pt" data-i18n="dv.title"></span><span class="ptag" id="dv-count">—</span></div>
+    <div class="cards4 dv-sum">
+      <div class="card"><label data-i18n="dv.sum.oi"></label><b id="dv-oi-t">—</b></div>
+      <div class="card"><label data-i18n="dv.sum.vol"></label><b id="dv-vol-t">—</b></div>
+      <div class="card"><label data-i18n="dv.sum.pos"></label><b class="up" id="dv-pos">—</b></div>
+      <div class="card"><label data-i18n="dv.sum.neg"></label><b class="dn" id="dv-neg">—</b></div>
+    </div>
+    <div class="pb dv">
+      <div class="dv-col">
+        <div class="dv-h"><span data-i18n="dv.oi"></span><span data-i18n="dv.oi.cols"></span></div>
+        <div class="dv-list" id="dv-oi"></div>
+      </div>
+      <div class="dv-col">
+        <div class="dv-h"><span data-i18n="dv.fhi"></span><span data-i18n="dv.f.cols"></span></div>
+        <div class="dv-list" id="dv-fhi"></div>
+        <div class="dv-h"><span data-i18n="dv.flo"></span><span data-i18n="dv.f.cols"></span></div>
+        <div class="dv-list" id="dv-flo"></div>
+      </div>
     </div>
   </section>
 
