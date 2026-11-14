@@ -370,15 +370,18 @@ function initKlineControls() {
   cv.addEventListener('dblclick', () => { S.kv.offset = 0; S.kv.step = 6; renderSpot(); });
 }
 function whaleRuleTip() {
-  const rows = [];
-  for (const mkt of ['spot', 'perp']) {
-    const list = mkt === 'spot' ? S.focus.slice(0, TRADE_N) : S.focus.filter((p) => S.futAll.has(p)).slice(0, PERP_N);
-    for (const p of list) rows.push({ mkt, p, ...whaleTh(mkt, p) });
-  }
-  return `<div class="tt-h">${F.esc(t('wh.rule.h'))}</div><div class="tt-f tt-wrap">${F.esc(t('wh.rule'))}</div>` +
-    `<div class="tt-grid"><span>${F.esc(t('pk.coin'))}</span><span>${F.esc(t('wh.rule.th'))}</span><span>${F.esc(t('wh.rule.med'))}</span><span>${F.esc(t('wh.rule.n'))}</span>` +
-    rows.map((r) => `<span><b>${F.esc(F.base(r.p))}</b> <i class="m-${r.mkt}">${F.esc(t(r.mkt))}</i></span><span>${F.usd(r.th)}${r.est ? '*' : ''}</span><span>${r.med ? F.usd(r.med) : '—'}</span><span>${r.n}</span>`).join('') +
-    `</div><div class="tt-f">${F.esc(t('wh.rule.est'))}</div>`;
+  const spot = S.focus.slice(0, TRADE_N), perp = S.focus.filter((p) => S.futAll.has(p)).slice(0, PERP_N);
+  const coins = [...new Set([...spot, ...perp])];
+  const cell = (mkt, list, p) => {
+    if (!list.includes(p)) return '<span class="dim">—</span>';
+    const w = whaleTh(mkt, p);
+    return `<span class="${w.est ? 'est' : ''}">${F.usd(w.th, w.th < 1e4 ? 0 : 1)}</span>`;
+  };
+  return `<div class="tt-h">${F.esc(t('wh.rule.h'))}</div>` +
+    `<ul class="tt-list"><li>${F.esc(t('wh.rule.1'))}</li><li>${F.esc(t('wh.rule.2'))}</li><li>${F.esc(t('wh.cover', { s: spot.length, p: perp.length }))}</li></ul>` +
+    `<div class="tt-grid3"><span>${F.esc(t('pk.coin'))}</span><span>${F.esc(t('spot'))}</span><span>${F.esc(t('perp'))}</span>` +
+    coins.map((p) => `<b>${F.esc(F.base(p))}</b>${cell('spot', spot, p)}${cell('perp', perp, p)}`).join('') +
+    `</div><div class="tt-f"><span class="est">${F.esc(t('wh.rule.estk'))}</span> ${F.esc(t('wh.rule.est'))}</div>`;
 }
 
 function candleTip(k) {
@@ -803,7 +806,7 @@ function renderWire() {
 
 let whalesVer = -1;
 function renderWhales() {
-  setText('wh-th', t('wh.th', { s: S.focus.slice(0, TRADE_N).length, p: S.focus.filter((p) => S.futAll.has(p)).slice(0, PERP_N).length }));
+  setText('wh-th', t('wh.th'));
   setText('hist-now', S.hist[S.hist.length - 1] + '/s');
   const cvh = $('cv-hist'), hb = drawBars(cvh, S.hist, C.amber);
   if (cvh._hover && hb >= 0) {
@@ -822,8 +825,10 @@ function renderWhales() {
     el.className = 'wcard ' + w.side;
     el.dataset.id = w.id;
     el.dataset.pair = w.pair;
-    el.innerHTML = `<div class="wc-h"><b>${F.esc(F.base(w.pair))}</b><span class="${w.side === 'buy' ? 'up' : 'dn'}">${F.esc(t(w.side === 'buy' ? 'wh.buy' : 'wh.sell'))} · ${F.esc(t(w.mkt))}</span><em>${F.usd(w.notional)}</em></div>` +
-      `<div class="wc-s">@ ${F.price(w.price)} · ${F.hms(w.ts)}${w.med ? ` · <span class="wc-x">${F.esc(t('wh.x', { x: Math.round(w.notional / w.med) }))}</span>` : ''}</div><div class="wc-bar"><i style="width:${Math.min(100, (Math.log10(w.notional / w.th) + 0.15) * 80).toFixed(0)}%"></i></div>`;
+    const mult = w.med ? Math.round(w.notional / w.med) : 0;
+    if (mult) el.title = t('wh.x.t', { x: mult, coin: F.base(w.pair), med: F.usd(w.med, 0) });
+    el.innerHTML = `<div class="wc-h"><b>${F.esc(F.base(w.pair))}</b><span class="${w.side === 'buy' ? 'up' : 'dn'}">${F.esc(t(w.side === 'buy' ? 'wh.buy' : 'wh.sell'))} · ${F.esc(t(w.mkt))}</span><em>${F.usd(w.notional, w.notional < 1e4 ? 0 : 2)}</em></div>` +
+      `<div class="wc-s"><span>@ ${F.price(w.price)} · ${F.hms(w.ts)}</span>${mult ? `<span class="wc-x">×${mult}</span>` : ''}</div><div class="wc-bar"><i style="width:${Math.min(100, (Math.log10(w.notional / w.th) + 0.15) * 80).toFixed(0)}%"></i></div>`;
     el.addEventListener('click', () => selectSymbol(w.pair));
     box.prepend(el);
     shell && shell.link(w.pair, el);
