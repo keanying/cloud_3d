@@ -34,7 +34,7 @@ Any static host works (GitHub Pages, Cloudflare Pages, Nginx…). ES modules nee
 | 数据流检查器 Wire inspector | WS 原始消息流、消息速率、流量、订阅数 | 全部 WS |
 | 神经壳 Neural shell (3D) | 成交额前 40 的币种，每个币一簇针刺：针长 = 24H 涨跌幅，密度 = 成交额，颜色 = 涨跌，亮度 = 实时成交脉冲。拖拽旋转、悬停看详情、点击切换币种。**三种皮肤**可切换（环面 / 地球 / 星系），切换时粒子平滑变形；地球的大陆轮廓来自 Natural Earth 1:110m（world-atlas，公有领域） | WS `spot.tickers` / `spot.trades` / `futures.trades` |
 | 输入卡片 Input cards | BTC / ETH / SOL 实时走势，选中币种的基差、资金费率历史、多空人数比 | `/futures/usdt/funding_rate`, `/futures/usdt/contract_stats` |
-| 巨鲸成交 Whale fills | 现货 ≥ $10K、永续 ≥ $50K 的大单（同一时刻同方向的成交合并为一笔主动单），每秒成交笔数直方图 | WS trades |
+| 巨鲸成交 Whale fills | **按币种自适应门槛**：同一币种、同方向、同一毫秒的成交合并为一笔主动单；需同时进入该币近 30 分钟（最多 800 笔）订单的前 0.5%、≥ 该币中位单 8 倍、≥ 保底（现货 $1K / 永续 $2K）；样本不足 60 笔时从严估算。卡片显示「×N 中位单」，悬停门槛标签可看各币当前门槛。监听范围：现货成交额前 16、永续前 10 + 当前选中币；每秒成交笔数直方图 | WS trades |
 | 全市场爆仓 Liquidations | 打开即从 REST 加载近 1 小时（最新 1000 笔）再接实时推送：1H 多/空爆仓额与笔数、最大单笔、多空占比；气泡时间轴（气泡大小=金额）+ 每 5 分钟合计；1H 爆仓最多的合约；实时爆仓流 | `/futures/usdt/liq_orders`, WS `futures.public_liquidates` |
 | 市场热力图 Market heatmap | 成交额前 60 的方块树图：面积 = 成交额，颜色 = 24H 涨跌，实时成交时边框闪烁；悬停看详情，点击切换币种 | `/spot/tickers` + WS trades |
 | 永续合约排行 Perp rankings | 总持仓、24H 成交、正/负费率合约数；持仓量 TOP 12；资金费率最高 / 最低各 6 个（含按各合约结算周期折算的年化） | `/futures/usdt/tickers`, `/futures/usdt/contracts` |

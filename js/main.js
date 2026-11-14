@@ -21,8 +21,16 @@ const LEVERAGED = /\d+[LS]$/;
 const FOCUS_N = 40;     // coins on the shell (spot tickers via WS)
 const TRADE_N = 16;     // coins whose spot trades are streamed
 const PERP_N = 10;      // perps whose tickers + trades are streamed
-const SPOT_WHALE = 10_000;
-const PERP_WHALE = 50_000;
+// Whale fills use a per-coin, adaptive threshold: an order is a whale when it is
+// in the coin's own top 0.5% of recent taker orders, at least 8× its median order,
+// and above a small floor. Measured on Gate.io: the old fixed $10K / $50K bar
+// only ever caught BTC / ETH; this spreads whales across all monitored coins.
+const WHALE_Q = 0.995;
+const WHALE_MEDX = 8;
+const WHALE_FLOOR = { spot: 1_000, perp: 2_000 };
+const WHALE_KEEP = 800;            // orders remembered per market + coin
+const WHALE_AGE = 30 * 60_000;     // … and only from the last 30 minutes
+const WHALE_MIN_N = 60;            // below this, estimate from 24h volume
 const HEAT_N = 60;      // tiles on the heatmap
 const PULSE_N = 64;     // bars on the header ring
 const DIST_BINS = [
@@ -361,6 +369,18 @@ function initKlineControls() {
   cv.addEventListener('pointercancel', end);
   cv.addEventListener('dblclick', () => { S.kv.offset = 0; S.kv.step = 6; renderSpot(); });
 }
+function whaleRuleTip() {
+  const rows = [];
+  for (const mkt of ['spot', 'perp']) {
+    const list = mkt === 'spot' ? S.focus.slice(0, TRADE_N) : S.focus.filter((p) => S.futAll.has(p)).slice(0, PERP_N);
+    for (const p of list) rows.push({ mkt, p, ...whaleTh(mkt, p) });
+  }
+  return `<div class="tt-h">${F.esc(t('wh.rule.h'))}</div><div class="tt-f tt-wrap">${F.esc(t('wh.rule'))}</div>` +
+    `<div class="tt-grid"><span>${F.esc(t('pk.coin'))}</span><span>${F.esc(t('wh.rule.th'))}</span><span>${F.esc(t('wh.rule.med'))}</span><span>${F.esc(t('wh.rule.n'))}</span>` +
+    rows.map((r) => `<span><b>${F.esc(F.base(r.p))}</b> <i class="m-${r.mkt}">${F.esc(t(r.mkt))}</i></span><span>${F.usd(r.th)}${r.est ? '*' : ''}</span><span>${r.med ? F.usd(r.med) : '—'}</span><span>${r.n}</span>`).join('') +
+    `</div><div class="tt-f">${F.esc(t('wh.rule.est'))}</div>`;
+}
+
 function candleTip(k) {
   const chg = k.c - k.o, cls = F.cls(chg), d = F.priceDigits(k.o);
   return `<div class="tt-h">${F.esc(F.base(S.sel))} · ${S.kv.int.toUpperCase()} · ${F.dhm(k.t * 1000)}</div>` +
@@ -471,18 +491,51 @@ function onTrade(mkt, pair, side, price, amount, ts) {
   const agg = pending.get(key);
   if (agg) { agg.notional += notional; agg.amount += amount; agg.price = price; }
   else pending.set(key, { mkt, pair, side, price, amount, notional, ts });
-  const k = notional / (mkt === 'spot' ? SPOT_WHALE : PERP_WHALE);
+  const k = notional / whaleTh(mkt, pair).th;
   shell && shell.pulse(pair, Math.min(0.25, 0.03 + k * 0.3));
   heat && heat.flash(pair, Math.min(0.5, 0.05 + k * 0.4));
+}
+
+// ---------------------------------------------------------------- adaptive whale thresholds
+const orderStats = new Map(); // 'spot|BTC_USDT' -> { v: [notional], t: [ms], th, med, n, at, dirty }
+function recordOrder(mkt, pair, notional) {
+  const key = mkt + '|' + pair;
+  let s = orderStats.get(key);
+  if (!s) { s = { v: [], t: [], th: 0, med: 0, n: 0, at: 0, dirty: true }; orderStats.set(key, s); }
+  s.v.push(notional); s.t.push(Date.now());
+  const cut = Date.now() - WHALE_AGE;
+  while (s.v.length > WHALE_KEEP || (s.t.length && s.t[0] < cut)) { s.v.shift(); s.t.shift(); }
+  s.dirty = true;
+}
+/** {th, med, n, est} for a market + coin; recomputed at most once a second */
+function whaleTh(mkt, pair) {
+  const key = mkt + '|' + pair, floor = WHALE_FLOOR[mkt];
+  const s = orderStats.get(key);
+  if (s && s.v.length >= WHALE_MIN_N) {
+    if (s.dirty && Date.now() - s.at > 1000) {
+      const a = s.v.slice().sort((x, y) => x - y);
+      s.med = a[a.length >> 1];
+      s.th = Math.max(floor, a[Math.min(a.length - 1, Math.floor(a.length * WHALE_Q))], s.med * WHALE_MEDX);
+      s.n = a.length; s.at = Date.now(); s.dirty = false;
+    }
+    return { th: s.th, med: s.med, n: s.n, est: false };
+  }
+  // warm-up (slow coins take minutes to collect samples): be conservative —
+  // 2× the floor, ~3 s of the coin's average 24h flow, and 10× the running median
+  const vol = mkt === 'spot' ? S.spotAll.get(pair)?.qv : S.futAll.get(pair)?.vol;
+  let med = 0;
+  if (s && s.v.length >= 10) { const a = s.v.slice().sort((x, y) => x - y); med = a[a.length >> 1]; }
+  return { th: Math.max(floor * 2, ((vol || 0) / 86400) * 3, med * 10), med, n: s ? s.v.length : 0, est: true };
 }
 
 const pending = new Map();
 function flushOrders() {
   for (const o of pending.values()) {
-    const th = o.mkt === 'spot' ? SPOT_WHALE : PERP_WHALE;
+    const w = whaleTh(o.mkt, o.pair), th = w.th;
+    recordOrder(o.mkt, o.pair, o.notional);
     if (o.notional < th) continue;
     S.whaleCount++;
-    S.whales.unshift({ id: S.whaleCount, ...o, th });
+    S.whales.unshift({ id: S.whaleCount, ...o, th, med: w.med });
     if (S.whales.length > 14) S.whales.length = 14;
     S.ver.whales++;
     shell && shell.pulse(o.pair, Math.min(1.4, 0.6 + Math.log10(o.notional / th)));
@@ -750,7 +803,7 @@ function renderWire() {
 
 let whalesVer = -1;
 function renderWhales() {
-  setText('wh-th', t('wh.th', { s: F.usd(SPOT_WHALE, 0), p: F.usd(PERP_WHALE, 0) }));
+  setText('wh-th', t('wh.th', { s: S.focus.slice(0, TRADE_N).length, p: S.focus.filter((p) => S.futAll.has(p)).slice(0, PERP_N).length }));
   setText('hist-now', S.hist[S.hist.length - 1] + '/s');
   const cvh = $('cv-hist'), hb = drawBars(cvh, S.hist, C.amber);
   if (cvh._hover && hb >= 0) {
@@ -770,7 +823,7 @@ function renderWhales() {
     el.dataset.id = w.id;
     el.dataset.pair = w.pair;
     el.innerHTML = `<div class="wc-h"><b>${F.esc(F.base(w.pair))}</b><span class="${w.side === 'buy' ? 'up' : 'dn'}">${F.esc(t(w.side === 'buy' ? 'wh.buy' : 'wh.sell'))} · ${F.esc(t(w.mkt))}</span><em>${F.usd(w.notional)}</em></div>` +
-      `<div class="wc-s">@ ${F.price(w.price)} · ${F.hms(w.ts)}</div><div class="wc-bar"><i style="width:${Math.min(100, (Math.log10(w.notional / w.th) + 0.15) * 80).toFixed(0)}%"></i></div>`;
+      `<div class="wc-s">@ ${F.price(w.price)} · ${F.hms(w.ts)}${w.med ? ` · <span class="wc-x">${F.esc(t('wh.x', { x: Math.round(w.notional / w.med) }))}</span>` : ''}</div><div class="wc-bar"><i style="width:${Math.min(100, (Math.log10(w.notional / w.th) + 0.15) * 80).toFixed(0)}%"></i></div>`;
     el.addEventListener('click', () => selectSymbol(w.pair));
     box.prepend(el);
     shell && shell.link(w.pair, el);
@@ -783,8 +836,9 @@ let tapeVer = -1;
 function renderTape() {
   if (tapeVer !== S.ver.tape) {
     tapeVer = S.ver.tape;
+    const thS = whaleTh('spot', S.sel).th, thP = whaleTh('perp', S.sel).th;
     $('tape-body').innerHTML = S.tape.slice(0, 30).map((x) => {
-      const th = x.mkt === 'spot' ? SPOT_WHALE : PERP_WHALE;
+      const th = x.mkt === 'spot' ? thS : thP;
       const sc = x.side === 'buy' ? 'up' : 'dn';
       return `<tr class="${x.notional >= th ? 'big' : ''}"><td>${F.hms(x.ts)}</td><td class="m-${x.mkt}">${F.esc(t(x.mkt))}</td>` +
         `<td class="${sc}">${F.esc(t(x.side === 'buy' ? 'wh.buy' : 'wh.sell'))}</td><td class="${sc}">${F.price(x.price)}</td><td>${F.amt(x.amount)}</td><td>${F.usd(x.notional)}</td></tr>`;
@@ -1048,6 +1102,8 @@ async function boot() {
     pulse = null;
   }
   initKlineControls();
+  $('wh-th').addEventListener('pointermove', (e) => showTip(whaleRuleTip(), e.clientX, e.clientY));
+  $('wh-th').addEventListener('pointerleave', hideTip);
   hoverable($('cv-basis'), renderBasis);
   hoverable($('cv-dist'), renderOverview);
   hoverable($('cv-hist'), renderWhales);

@@ -542,3 +542,13 @@ canvas { display: block; }
 .mq-track .it[data-pair] { cursor: pointer; }
 .mq-track .it[data-pair]:hover { color: var(--white); }
 .wire:hover { outline: 1px dashed rgba(255, 178, 46, .35); outline-offset: 2px; }
+
+/* whale rule tooltip */
+.g-tip .tt-wrap { white-space: normal; max-width: 340px; line-height: 1.45; margin-bottom: 4px; }
+.g-tip .tt-grid { display: grid; grid-template-columns: auto auto auto auto; gap: 1px 12px; font-size: 10.5px; margin-top: 4px; }
+.g-tip .tt-grid > span:nth-child(-n+4) { color: var(--dim2); font-size: 9.5px; text-transform: uppercase; }
+.g-tip .tt-grid > span:nth-child(4n+2), .g-tip .tt-grid > span:nth-child(4n+3), .g-tip .tt-grid > span:nth-child(4n+4) { text-align: right; }
+.g-tip .tt-grid i { font-style: normal; font-size: 9px; }
+.g-tip .m-spot { color: var(--cyan); } .g-tip .m-perp { color: var(--violet); }
+#wh-th { cursor: help; }
+.wc-x { color: var(--amber); }
