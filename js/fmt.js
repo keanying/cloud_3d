@@ -48,13 +48,26 @@ export function bps(v, d = 1) {
   return (v > 0 ? '+' : '') + v.toFixed(d);
 }
 const p2 = (n) => String(n).padStart(2, '0');
-export function hms(ms) {
+// display time zone for every timestamp on the page (set by the header switcher)
+let tz = 'UTC';
+const tzFmt = new Map();
+export const setTz = (z) => { tz = z; };
+export const getTz = () => tz;
+function zoneFmt(z) {
+  if (!tzFmt.has(z)) {
+    try { tzFmt.set(z, new Intl.DateTimeFormat('en-GB', { timeZone: z, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })); }
+    catch (e) { tzFmt.set(z, null); }
+  }
+  return tzFmt.get(z);
+}
+export function hms(ms, zone = tz) {
+  const f = zone === 'UTC' ? null : zoneFmt(zone);
+  if (f) return f.format(new Date(ms));
   const d = new Date(ms);
   return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
 }
 export function hmsms(ms) {
-  const d = new Date(ms);
-  return hms(ms) + '.' + String(d.getUTCMilliseconds()).padStart(3, '0');
+  return hms(ms) + '.' + String(Math.floor(((ms % 1000) + 1000) % 1000)).padStart(3, '0');
 }
 export function dur(sec) {
   if (!ok(sec) || sec < 0) return '—';

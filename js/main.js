@@ -8,6 +8,7 @@ import { createFunnel } from './funnel.js';
 import { createPulse } from './pulse3d.js';
 import { createHeatmap } from './heatmap.js';
 import { createPicker } from './picker.js';
+import { createTz } from './tz.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -58,7 +59,7 @@ const S = {
   top: [], dist: [], median: NaN, dv: null, fundInterval: new Map(),
   liqAll: [], liqStats: null, // market-wide liquidations, newest first (last ~65 min)
 };
-let spotWS, futWS, shell, funnel, pulse, heat, picker, liqChart, selToken = 0;
+let spotWS, futWS, shell, funnel, pulse, heat, picker, liqChart, tzSw, selToken = 0;
 const inputs = [];
 
 // ---------------------------------------------------------------- REST pollers
@@ -462,7 +463,7 @@ function perSecond() {
   }
   const cut = Date.now() - 60000;
   while (S.flow.length && S.flow[0].ts < cut) S.flow.shift();
-  $('clock').textContent = F.hms(Date.now() + S.offset) + ' UTC';
+  $('clock').textContent = F.hms(Date.now() + S.offset);
 }
 
 // ---------------------------------------------------------------- rendering
@@ -835,6 +836,7 @@ function render() {
   renderFunnelPanel();
   renderDeriv();
   renderLiq();
+  setText('tp-time-h', `${t('tp.time')} · ${tzSw ? tzSw.short() : 'UTC'}`);
   renderHeatHeader();
   setText('sh-count', t('sh.count', { n: shell ? shell.count() : 0 }));
   $('shell-wait').classList.toggle('hide', !!(shell && shell.count()));
@@ -885,8 +887,13 @@ function loop(now) {
 async function boot() {
   applyDom();
   $('lang-btn').addEventListener('click', () => setLang(getLang() === 'zh' ? 'en' : 'zh'));
-  onLang(() => { whalesVer = -1; tapeVer = -1; liqVer = -1; dvVer = -1; lqVer = -1; $('whales').innerHTML = ''; render(); renderMarquees(); });
+  onLang(() => { tzSw && tzSw.label(); whalesVer = -1; tapeVer = -1; liqVer = -1; dvVer = -1; lqVer = -1; $('whales').innerHTML = ''; render(); renderMarquees(); });
   buildInputs();
+  // time zone: re-render every list that shows timestamps
+  tzSw = createTz($('tz'), {
+    getNow: () => Date.now() + S.offset,
+    onChange: () => { whalesVer = -1; tapeVer = -1; liqVer = -1; lqVer = -1; $('whales').innerHTML = ''; $('clock').textContent = F.hms(Date.now() + S.offset); render(); },
+  });
   funnel = createFunnel($('cv-funnel'));
   heat = createHeatmap($('cv-heat'), { onPick: selectSymbol, onHover: onHeatHover });
   try {
@@ -926,6 +933,21 @@ async function boot() {
     console.error('WebGL shell unavailable', e);
     shell = null;
   }
+  // shell skin switcher (torus / globe / galaxy), remembered per browser
+  const skinSeg = $('skin-seg');
+  const applySkin = (v) => {
+    skinSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+    shell && shell.setSkin(v);
+  };
+  let skin0 = 'torus';
+  try { skin0 = localStorage.getItem('c3.skin') || 'torus'; } catch (e) { /* ignore */ }
+  applySkin(['torus', 'globe', 'galaxy'].includes(skin0) ? skin0 : 'torus');
+  skinSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (!b) return;
+    applySkin(b.dataset.v);
+    try { localStorage.setItem('c3.skin', b.dataset.v); } catch (err) { /* ignore */ }
+  });
   requestAnimationFrame(loop);
   setInterval(perSecond, 1000);
   setInterval(calibrateClock, 5000);

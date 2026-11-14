@@ -25,13 +25,14 @@ Any static host works (GitHub Pages, Cloudflare Pages, Nginx…). ES modules nee
 |---|---|---|
 | 顶栏 · 市场脉冲 Header pulse (3D) | 成交额前 64 的币种排成旋转的光柱环：上涨向上、下跌向下（高度按当下市场波动幅度自适应），扫描光束、巨鲸成交闪光，正前方的币名实时显示，点击切换 | `/spot/tickers` + WS |
 | 顶栏 Header | 选中币种价格、24H 涨跌、上涨占比、现货总成交、永续总持仓、UTC 时钟、连接状态 | `/spot/tickers`, `/futures/usdt/tickers`, `/spot/time` |
+| 时区切换 Time zone | 时钟旁选择国家/城市（北京、香港、新加坡、东京、纽约、伦敦…或本机时区），全页所有时间同步切换并记住选择 | 浏览器 Intl |
 | 币种选择器 Symbol picker | 可搜索全部 USDT 交易对；每行显示价格 / 24H / 成交额，标出有永续的币；成交额 / 涨幅 / 跌幅 / 有永续 四种排序；↑↓ Enter Esc 键盘操作，任意位置按 `/` 打开 | 本地数据 |
 | 市场总览 Market overview | 全部 USDT 交易对的成交额、涨跌家数、平均/加权涨跌、领涨领跌、永续持仓与加权资金费率、24H 涨跌分布直方图与中位数 | REST 每 15s / 30s 轮询 |
 | 盘口阶梯 Book ladder | 前 5 档买卖盘 + 近 40 分钟收盘价迷你图 | WS `spot.order_book` |
 | 现货 Spot | 1m K 线（含现价标签与量柱）、8 档深度与累计量 | REST `/spot/candlesticks` + WS `spot.candlesticks` |
 | 延迟与基差 Latency & basis | 永续-现货基差、标记-指数溢价、现货/永续推送延迟 | WS `futures.tickers`, `spot/futures.trades` |
 | 数据流检查器 Wire inspector | WS 原始消息流、消息速率、流量、订阅数 | 全部 WS |
-| 神经壳 Neural shell (3D) | 成交额前 40 的币种，每个币一簇针刺：针长 = 24H 涨跌幅，密度 = 成交额，颜色 = 涨跌，亮度 = 实时成交脉冲。拖拽旋转、悬停看详情、点击切换币种 | WS `spot.tickers` / `spot.trades` / `futures.trades` |
+| 神经壳 Neural shell (3D) | 成交额前 40 的币种，每个币一簇针刺：针长 = 24H 涨跌幅，密度 = 成交额，颜色 = 涨跌，亮度 = 实时成交脉冲。拖拽旋转、悬停看详情、点击切换币种。**三种皮肤**可切换（环面 / 地球 / 星系），切换时粒子平滑变形；地球的大陆轮廓来自 Natural Earth 1:110m（world-atlas，公有领域） | WS `spot.tickers` / `spot.trades` / `futures.trades` |
 | 输入卡片 Input cards | BTC / ETH / SOL 实时走势，选中币种的基差、资金费率历史、多空人数比 | `/futures/usdt/funding_rate`, `/futures/usdt/contract_stats` |
 | 巨鲸成交 Whale fills | 现货 ≥ $10K、永续 ≥ $50K 的大单（同一时刻同方向的成交合并为一笔主动单），每秒成交笔数直方图 | WS trades |
 | 全市场爆仓 Liquidations | 打开即从 REST 加载近 1 小时（最新 1000 笔）再接实时推送：1H 多/空爆仓额与笔数、最大单笔、多空占比；气泡时间轴（气泡大小=金额）+ 每 5 分钟合计；1H 爆仓最多的合约；实时爆仓流 | `/futures/usdt/liq_orders`, WS `futures.public_liquidates` |
@@ -52,6 +53,9 @@ js/funnel.js        波动锥 / 爆仓漏斗（Canvas 2D 伪 3D）/ vol cone (2D
 js/pulse3d.js       顶栏 3D 市场脉冲光柱环 / header 3D pulse ring
 js/heatmap.js       市场热力图（squarified treemap）/ market heatmap
 js/picker.js        可搜索的币种选择器 / searchable symbol picker
+js/liqchart.js      可交互的爆仓气泡时间轴 / interactive liquidation timeline
+js/tz.js            时区切换 / time-zone switcher
+js/landmask.js      1° 海陆位图（地球皮肤）/ land mask for the globe skin
 js/charts.js        K 线、迷你图、柱状图等 / small chart helpers
 js/i18n.js          中英文字典 / zh-en dictionary
 js/fmt.js           数字、价格、时间格式化 / formatting
