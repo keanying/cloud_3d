@@ -113,6 +113,19 @@ export function createFunnel(cv) {
     ctx.fillStyle = C.dim2;
     const ax = (x, txt) => { const q = P(x, floor, 0.62); ctx.fillText(txt, q[0] - 12, q[1] + 12); };
     ax(XH(60), '-60m'); ax(XH(30), '-30m'); ax(0, data.labels.now); ax(XF(30), '+30m');
+
+    // hover: nearest point of the price history
+    const hv = cv._hover;
+    if (!hv) return null;
+    let bi = -1, bd = Infinity;
+    hp.forEach((q, i) => { const d = Math.abs(q[0] - hv.x) + Math.abs(q[1] - hv.y) * 0.25; if (d < bd) { bd = d; bi = i; } });
+    if (bi < 0 || bd > 60) return null;
+    const q = hp[bi];
+    ctx.strokeStyle = 'rgba(238,244,255,.35)'; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(...P(hist[bi][0], floor, 0)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.white; ctx.shadowColor = C.cyan; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(q[0], q[1], 3.5, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    return bi < n ? { t: data.closes[bi].t * 1000, c: data.closes[bi].c, now: false } : { t: null, c: last, now: true };
   }
 
   return { draw, liq };

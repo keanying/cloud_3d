@@ -521,3 +521,24 @@ canvas { display: block; }
 .dv-row i { position: absolute; left: 0; top: 2px; bottom: 2px; opacity: .16; border-radius: 1px; }
 .dv-row i.bar-c { background: var(--cyan); } .dv-row i.bar-g { background: var(--green); } .dv-row i.bar-r { background: var(--red); }
 .dv-b { font-weight: 800; color: var(--white); }
+
+/* ---------- shared tooltip + chart interaction ---------- */
+.g-tip {
+  position: fixed; left: 0; top: 0; z-index: 200; pointer-events: none; display: none;
+  background: rgba(6, 12, 26, .94); border: 1px solid var(--cyan); padding: 6px 9px; font-size: 11px; min-width: 170px;
+  box-shadow: 0 0 16px rgba(69, 212, 255, .25), 0 8px 24px rgba(0, 0, 0, .5);
+}
+.g-tip .tt-h { color: var(--cyan); font-weight: 800; margin-bottom: 3px; white-space: nowrap; }
+.g-tip .tt-r { display: flex; justify-content: space-between; gap: 14px; white-space: nowrap; }
+.g-tip .tt-f { margin-top: 4px; color: var(--dim2); font-size: 9.5px; }
+.cv-candles { cursor: crosshair; touch-action: pan-y; }
+.cv-candles.drag { cursor: grabbing; }
+.sp-legend .seg button { padding: 1px 7px; }
+.k-hint { color: var(--dim2); font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cv-basis, .cv-dist, .cv-hist, .cv-flow, .cv-funnel { cursor: crosshair; }
+.drow, .ladder .lr { cursor: default; }
+.drow:hover, .ladder .lr:hover { outline: 1px solid rgba(69, 212, 255, .45); outline-offset: -1px; }
+.marquee:hover .mq-track { animation-play-state: paused; }
+.mq-track .it[data-pair] { cursor: pointer; }
+.mq-track .it[data-pair]:hover { color: var(--white); }
+.wire:hover { outline: 1px dashed rgba(255, 178, 46, .35); outline-offset: 2px; }

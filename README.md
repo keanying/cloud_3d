@@ -29,7 +29,7 @@ Any static host works (GitHub Pages, Cloudflare Pages, Nginx…). ES modules nee
 | 币种选择器 Symbol picker | 可搜索全部 USDT 交易对；每行显示价格 / 24H / 成交额，标出有永续的币；成交额 / 涨幅 / 跌幅 / 有永续 四种排序；↑↓ Enter Esc 键盘操作，任意位置按 `/` 打开 | 本地数据 |
 | 市场总览 Market overview | 全部 USDT 交易对的成交额、涨跌家数、平均/加权涨跌、领涨领跌、永续持仓与加权资金费率、24H 涨跌分布直方图与中位数 | REST 每 15s / 30s 轮询 |
 | 盘口阶梯 Book ladder | 前 5 档买卖盘 + 近 40 分钟收盘价迷你图 | WS `spot.order_book` |
-| 现货 Spot | 1m K 线（含现价标签与量柱）、8 档深度与累计量 | REST `/spot/candlesticks` + WS `spot.candlesticks` |
+| 现货 Spot | K 线 1m / 5m / 15m / 1H / 4H / 1D：悬停十字线显示开盘 / 最高 / 最低 / 收盘 / 涨跌额 / 涨跌幅 / 振幅 / 成交额，滚轮缩放、拖拽回看、双击回到最新；8 档深度（悬停看累计数量 / 金额 / 距中间价） | REST `/spot/candlesticks` + WS `spot.candlesticks` |
 | 延迟与基差 Latency & basis | 永续-现货基差、标记-指数溢价、现货/永续推送延迟 | WS `futures.tickers`, `spot/futures.trades` |
 | 数据流检查器 Wire inspector | WS 原始消息流、消息速率、流量、订阅数 | 全部 WS |
 | 神经壳 Neural shell (3D) | 成交额前 40 的币种，每个币一簇针刺：针长 = 24H 涨跌幅，密度 = 成交额，颜色 = 涨跌，亮度 = 实时成交脉冲。拖拽旋转、悬停看详情、点击切换币种。**三种皮肤**可切换（环面 / 地球 / 星系），切换时粒子平滑变形；地球的大陆轮廓来自 Natural Earth 1:110m（world-atlas，公有领域） | WS `spot.tickers` / `spot.trades` / `futures.trades` |
@@ -40,6 +40,10 @@ Any static host works (GitHub Pages, Cloudflare Pages, Nginx…). ES modules nee
 | 永续合约排行 Perp rankings | 总持仓、24H 成交、正/负费率合约数；持仓量 TOP 12；资金费率最高 / 最低各 6 个（含按各合约结算周期折算的年化） | `/futures/usdt/tickers`, `/futures/usdt/contracts` |
 | 逐笔成交 Execution tape | 选中币种的现货 + 永续逐笔成交、60s 买卖力量 | WS trades |
 | 波动锥 · 爆仓漏斗 Vol cone | 近 60 分钟价格 → 未来 30 分钟 ±1σ / ±2σ 实现波动率锥；选中合约的爆仓以火花落入漏斗；全市场实时爆仓列表；资金费结算倒计时、多空比、近 2H 爆仓额 | WS `futures.public_liquidates` (`!all`), `/futures/usdt/contracts/{c}` |
+
+### 鼠标交互 / Mouse interaction
+
+几乎所有图表都可悬停：K 线、盘口 / 阶梯、基差与延迟、涨跌分布（含该区间成交额最大的币）、成交笔数、买卖力量、波动锥历史线、顶栏光柱环（悬停任意光柱、点击切换）、爆仓气泡、热力图、3D 神经壳。顶部滚动行情悬停暂停、点击切换币种；原始消息流悬停冻结便于阅读。
 
 ## 结构 / Layout
 
@@ -55,6 +59,7 @@ js/heatmap.js       市场热力图（squarified treemap）/ market heatmap
 js/picker.js        可搜索的币种选择器 / searchable symbol picker
 js/liqchart.js      可交互的爆仓气泡时间轴 / interactive liquidation timeline
 js/tz.js            时区切换 / time-zone switcher
+js/tip.js           全页共用的悬浮提示 / shared tooltip + canvas hover helper
 js/landmask.js      1° 海陆位图（地球皮肤）/ land mask for the globe skin
 js/charts.js        K 线、迷你图、柱状图等 / small chart helpers
 js/i18n.js          中英文字典 / zh-en dictionary

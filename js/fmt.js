@@ -66,6 +66,18 @@ export function hms(ms, zone = tz) {
   const d = new Date(ms);
   return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
 }
+const dFmt = new Map();
+/** "11-14 13:35" in the display time zone (for candles) */
+export function dhm(ms, zone = tz) {
+  if (!dFmt.has(zone)) {
+    try { dFmt.set(zone, new Intl.DateTimeFormat('en-GB', { timeZone: zone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })); }
+    catch (e) { dFmt.set(zone, null); }
+  }
+  const f = dFmt.get(zone);
+  if (!f) return hms(ms).slice(0, 5);
+  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return `${p.month}-${p.day} ${p.hour}:${p.minute}`;
+}
 export function hmsms(ms) {
   return hms(ms) + '.' + String(Math.floor(((ms % 1000) + 1000) % 1000)).padStart(3, '0');
 }

@@ -9,6 +9,7 @@ import { createPulse } from './pulse3d.js';
 import { createHeatmap } from './heatmap.js';
 import { createPicker } from './picker.js';
 import { createTz } from './tz.js';
+import { showTip, hideTip, tr, hoverable } from './tip.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -58,6 +59,8 @@ const S = {
   ver: { tape: 0, whales: 0, liqs: 0, dv: 0 },
   top: [], dist: [], median: NaN, dv: null, fundInterval: new Map(),
   liqAll: [], liqStats: null, // market-wide liquidations, newest first (last ~65 min)
+  kv: { int: '1m', step: 6, offset: 0, maxOffset: 0 }, kl: [], // K-line view + candles for non-1m intervals
+  wirePaused: false, bookHover: null, rtt: NaN,
 };
 let spotWS, futWS, shell, funnel, pulse, heat, picker, liqChart, tzSw, selToken = 0;
 const inputs = [];
@@ -84,8 +87,10 @@ async function pollSpotAll() {
     movers.sort((a, b) => b.chg - a.chg);
     S.mk = { vol, up, dn, n, avg: sum / n, wavg: wsum / vol, gainers: movers.slice(0, 8), losers: movers.slice(-8).reverse() };
     const live = [...S.spotAll.values()].filter((r) => !STABLE.has(r.base) && !LEVERAGED.test(r.base) && r.last > 0 && r.qv > 0);
-    S.dist = DIST_BINS.map(([lo, hi, label]) => ({ label, sign: lo >= 0 ? 1 : -1, n: live.filter((r) => r.chg > lo && r.chg <= hi || (lo === 0 && r.chg === 0)).length }));
-    S.dist[4].n = live.filter((r) => r.chg > -2 && r.chg < 0).length;
+    S.dist = DIST_BINS.map(([lo, hi, label], i) => {
+      const inBin = live.filter((r) => (i === 4 ? r.chg > -2 && r.chg < 0 : (r.chg > lo && r.chg <= hi) || (lo === 0 && r.chg === 0)));
+      return { label, lo, hi, sign: lo >= 0 ? 1 : -1, n: inBin.length, top: inBin.sort((a, b) => b.qv - a.qv).slice(0, 5) };
+    });
     const chgs = live.map((r) => r.chg).sort((a, b) => a - b);
     S.median = chgs.length ? chgs[chgs.length >> 1] : NaN;
     S.top = live.sort((a, b) => b.qv - a.qv);
@@ -192,6 +197,7 @@ function selSubs(sym, on) {
   spotWS[fn]('spot.trades', [sym]);
   spotWS[fn]('spot.order_book', [sym, '20', '100ms']);
   spotWS[fn]('spot.candlesticks', ['1m', sym]);
+  if (S.kv.int !== '1m') spotWS[fn]('spot.candlesticks', [S.kv.int, sym]);
   if (S.futAll.has(sym)) {
     futWS[fn]('futures.tickers', [sym]);
     futWS[fn]('futures.trades', [sym]);
@@ -205,7 +211,7 @@ async function selectSymbol(sym) {
   S.sel = sym;
   const token = ++selToken;
   if (changed) {
-    S.candles = []; S.book = null; S.tape = []; S.flow = []; S.basis = [];
+    S.candles = []; S.kl = []; S.kv.offset = 0; S.book = null; S.tape = []; S.flow = []; S.basis = [];
     S.fut = { next: 0, stats: [], fund: [] };
     S.ver.tape++;
   }
@@ -214,7 +220,8 @@ async function selectSymbol(sym) {
   shell && shell.setSelected(sym);
   heat && heat.setSelected(sym);
   try {
-    const raw = await rest('/spot/candlesticks', { currency_pair: sym, interval: '1m', limit: 120 });
+    if (S.kv.int !== '1m') loadKline(sym, S.kv.int, token);
+    const raw = await rest('/spot/candlesticks', { currency_pair: sym, interval: '1m', limit: 400 });
     if (token !== selToken) return;
     const fromRest = raw.map((a) => ({ t: +a[0], v: +a[1], c: +a[2], h: +a[3], l: +a[4], o: +a[5] }));
     // keep any live candle that arrived over WS while REST was in flight
@@ -246,10 +253,28 @@ function latency(kind, m) {
 // some machines' clocks are hours off. Every frame carries the server push time,
 // so max(time_ms − now) ≈ true offset − fastest latency: if that disagrees with
 // the current offset by more than 2 s, trust it instead.
+// NTP-style sync against /spot/time: the sample with the shortest round trip wins;
+// error is at most half that round trip. A healthy local clock is left alone.
+async function syncClock() {
+  let best = null;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const t0 = Date.now(), r = await rest('/spot/time'), t1 = Date.now();
+      if (!best || t1 - t0 < best.rtt) best = { rtt: t1 - t0, off: r.server_time - (t0 + t1) / 2 };
+    } catch (e) { /* try again */ }
+  }
+  if (!best) return;
+  S.rtt = best.rtt;
+  const off = Math.abs(best.off) > Math.max(500, best.rtt) ? best.off : 0;
+  if (Math.abs(off - S.offset) > 250) { S.offset = off; latBuf.spot.length = 0; latBuf.fut.length = 0; }
+}
+
 function calibrateClock() {
   if (skew.length < 30) return;
   let best = -Infinity;
   for (const v of skew) if (v > best) best = v;
+  // max(skew) = true offset − fastest one-way latency; add back an estimate of that latency
+  best += Number.isFinite(S.rtt) ? S.rtt / 2 : 60;
   if (Math.abs(best - S.offset) > 2000) {
     S.offset = best;
     latBuf.spot.length = 0; latBuf.fut.length = 0;
@@ -279,15 +304,69 @@ function onSpot(m) {
       if (r.s === S.sel) S.book = { bids: r.bids.map((x) => [+x[0], +x[1]]), asks: r.asks.map((x) => [+x[0], +x[1]]) };
       break;
     case 'spot.candlesticks': {
-      const pair = r.n.slice(r.n.indexOf('_') + 1);
+      const cut = r.n.indexOf('_'), int = r.n.slice(0, cut), pair = r.n.slice(cut + 1);
       if (pair !== S.sel) return;
       const k = { t: +r.t, o: +r.o, h: +r.h, l: +r.l, c: +r.c, v: +r.v };
-      const lastK = S.candles[S.candles.length - 1];
-      if (lastK && lastK.t === k.t) S.candles[S.candles.length - 1] = k;
-      else if (!lastK || k.t > lastK.t) { S.candles.push(k); if (S.candles.length > 240) S.candles.shift(); }
+      if (int === '1m') pushCandle(S.candles, k);
+      if (int === S.kv.int && int !== '1m') pushCandle(S.kl, k);
       break;
     }
   }
+}
+
+function pushCandle(arr, k) {
+  const lastK = arr[arr.length - 1];
+  if (lastK && lastK.t === k.t) arr[arr.length - 1] = k;
+  else if (!lastK || k.t > lastK.t) { arr.push(k); if (arr.length > 600) arr.shift(); }
+}
+
+// ---------------------------------------------------------------- K-line interval / zoom / pan
+const chartCandles = () => (S.kv.int === '1m' ? S.candles : S.kl);
+async function loadKline(sym, int, token) {
+  try {
+    const raw = await rest('/spot/candlesticks', { currency_pair: sym, interval: int, limit: 400 });
+    if (token !== selToken || int !== S.kv.int) return;
+    const rows = raw.map((a) => ({ t: +a[0], v: +a[1], c: +a[2], h: +a[3], l: +a[4], o: +a[5] }));
+    const live = S.kl.filter((k) => k.t > rows[rows.length - 1].t);
+    S.kl = rows.concat(live);
+  } catch (e) { /* WS fills in */ }
+}
+function setKlInt(int) {
+  if (int === S.kv.int) return;
+  const old = S.kv.int;
+  if (spotWS && old !== '1m') spotWS.unsubscribe('spot.candlesticks', [old, S.sel]);
+  S.kv.int = int; S.kv.offset = 0; S.kl = [];
+  if (int !== '1m') { spotWS && spotWS.subscribe('spot.candlesticks', [int, S.sel]); loadKline(S.sel, int, selToken); }
+  document.querySelectorAll('#kl-int button').forEach((b) => b.classList.toggle('on', b.dataset.v === int));
+  renderSpot();
+}
+function initKlineControls() {
+  const cv = $('cv-candles');
+  $('kl-int').addEventListener('click', (e) => { const b = e.target.closest('button[data-v]'); if (b) setKlInt(b.dataset.v); });
+  hoverable(cv, renderSpot);
+  cv.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    S.kv.step = Math.max(2, Math.min(24, S.kv.step * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+    renderSpot();
+  }, { passive: false });
+  let drag = null;
+  cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, off: S.kv.offset }; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
+  cv.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    S.kv.offset = Math.max(0, Math.min(S.kv.maxOffset, drag.off + (e.clientX - drag.x) / S.kv.step));
+    renderSpot();
+  });
+  const end = () => { drag = null; cv.classList.remove('drag'); };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('dblclick', () => { S.kv.offset = 0; S.kv.step = 6; renderSpot(); });
+}
+function candleTip(k) {
+  const chg = k.c - k.o, cls = F.cls(chg), d = F.priceDigits(k.o);
+  return `<div class="tt-h">${F.esc(F.base(S.sel))} · ${S.kv.int.toUpperCase()} · ${F.dhm(k.t * 1000)}</div>` +
+    tr(t('k.o'), F.price(k.o)) + tr(t('k.h'), F.price(k.h)) + tr(t('k.l'), F.price(k.l)) + tr(t('k.c'), F.price(k.c), cls) +
+    tr(t('k.chg'), (chg > 0 ? '+' : '') + F.price(chg, d), cls) + tr(t('k.pct'), F.pct((chg / k.o) * 100), cls) +
+    tr(t('k.amp'), (((k.h - k.l) / k.o) * 100).toFixed(2) + '%') + tr(t('k.vol'), F.usd(k.v));
 }
 
 function onFut(m) {
@@ -455,6 +534,7 @@ function perSecond() {
   const sp = S.spotAll.get(S.sel)?.last, fu = S.futAll.get(S.sel);
   if (sp) {
     S.basis.push({
+      ts: Date.now() + S.offset,
       bps: fu && fu.last ? ((fu.last - sp) / sp) * 1e4 : NaN,
       prem: fu && fu.index ? ((fu.mark - fu.index) / fu.index) * 1e4 : NaN,
       latS: S.lat.spot, latF: S.lat.fut,
@@ -564,7 +644,17 @@ function renderOverview() {
     setText('ov-gainer', g ? `${g.base} ${F.pct(g.chg)}` : '—');
     setText('ov-loser', l ? `${l.base} ${F.pct(l.chg)}` : '—');
     setText('ov-median', t('ov.median', { v: F.pct(S.median) }), F.cls(S.median));
-    drawDist($('cv-dist'), S.dist);
+    const cvd = $('cv-dist'), di = drawDist(cvd, S.dist);
+    if (cvd._hover) {
+      const b = S.dist[di];
+      if (b) {
+        const range = `${Number.isFinite(b.lo) ? (b.lo > 0 ? '+' : '') + b.lo + '%' : '−∞'} ~ ${Number.isFinite(b.hi) ? (b.hi > 0 ? '+' : '') + b.hi + '%' : '+∞'}`;
+        showTip(`<div class="tt-h">24H ${range}</div>` + tr(t('ov.tt.pairs'), F.num(b.n)) +
+          tr(t('ov.tt.share'), ((b.n / Math.max(1, mk.n)) * 100).toFixed(1) + '%') +
+          (b.top.length ? `<div class="tt-f">${F.esc(t('ov.tt.top'))}</div>` + b.top.map((r) => tr(F.esc(r.base), `${F.pct(r.chg)} · ${F.usd(r.qv)}`, F.cls(r.chg))).join('') : ''),
+        cvd._hover.cx, cvd._hover.cy);
+      } else hideTip();
+    }
   }
   if (fm) {
     setText('ov-oi', F.usd(fm.oi));
@@ -583,16 +673,30 @@ function renderBook() {
   const lv = Math.max(3, Math.min(10, Math.floor((lw.clientHeight - 16 - 24) / 2 / 16)));
   const a5 = bk.asks.slice(0, lv).reverse(), b5 = bk.bids.slice(0, lv);
   const m5 = Math.max(...a5.map((x) => x[1]), ...b5.map((x) => x[1]));
-  const row = (x, c, m) => `<div class="lr ${c}"><i style="width:${((x[1] / m) * 100).toFixed(1)}%"></i><span>${F.price(x[0])}</span><span>${F.amt(x[1])}</span></div>`;
+  const row = (x, c, m) => `<div class="lr ${c}" data-p="${x[0]}"><i style="width:${((x[1] / m) * 100).toFixed(1)}%"></i><span>${F.price(x[0])}</span><span>${F.amt(x[1])}</span></div>`;
   $('ladder').innerHTML = a5.map((x) => row(x, 'a', m5)).join('') + `<div class="mid">${F.price(mid)}</div>` + b5.map((x) => row(x, 'b', m5)).join('');
   // depth: 8 / 8 with cumulative
   const cum = (arr) => { let s = 0; return arr.map((x) => [x[0], x[1], (s += x[1])]); };
   const asks = cum(bk.asks.slice(0, 8)), bids = cum(bk.bids.slice(0, 8));
   const mc = Math.max(asks[asks.length - 1][2], bids[bids.length - 1][2]);
-  const drow = (x, c) => `<div class="drow ${c}"><i style="width:${((x[2] / mc) * 100).toFixed(1)}%"></i><span>${F.price(x[0])}</span><span>${F.amt(x[1])}</span><span>${F.amt(x[2])}</span></div>`;
+  const drow = (x, c) => `<div class="drow ${c}" data-p="${x[0]}"><i style="width:${((x[2] / mc) * 100).toFixed(1)}%"></i><span>${F.price(x[0])}</span><span>${F.amt(x[1])}</span><span>${F.amt(x[2])}</span></div>`;
   $('depth-asks').innerHTML = asks.slice().reverse().map((x) => drow(x, 'a')).join('');
   $('depth-bids').innerHTML = bids.map((x) => drow(x, 'b')).join('');
   setText('depth-spread', t('dp.spread', { v: F.price(spread, F.priceDigits(mid)), bps: ((spread / mid) * 1e4).toFixed(2) }));
+  if (S.bookHover) bookTip(S.bookHover.cx, S.bookHover.cy);
+}
+
+// tooltip for one price level of the depth table / ladder: cumulative size + notional from the best price
+function bookTip(cx, cy) {
+  const el = document.elementFromPoint(cx, cy)?.closest('.drow, .lr');
+  const bk = S.book;
+  if (!el || !bk) { hideTip(); return; }
+  const p = +el.dataset.p, isAsk = el.classList.contains('a');
+  const side = isAsk ? bk.asks : bk.bids, mid = (bk.asks[0][0] + bk.bids[0][0]) / 2;
+  let q = 0, n = 0;
+  for (const [px, sz] of side) { if (isAsk ? px > p : px < p) break; q += sz; n += px * sz; }
+  showTip(`<div class="tt-h">${F.esc(F.base(S.sel))} · <span class="${isAsk ? 'dn' : 'up'}">${F.esc(t(isAsk ? 'dp.tt.ask' : 'dp.tt.bid'))}</span> ${F.price(p)}</div>` +
+    tr(t('dp.tt.cumq'), F.amt(q)) + tr(t('dp.tt.cumn'), F.usd(n)) + tr(t('dp.tt.dist'), F.pct(((p - mid) / mid) * 100, 3), isAsk ? 'dn' : 'up'), cx, cy);
 }
 
 function renderSpot() {
@@ -604,7 +708,10 @@ function renderSpot() {
     setText('sp-low', F.price(rec.low));
     setText('sp-qv', F.usd(rec.qv));
   }
-  drawCandles($('cv-candles'), S.candles);
+  const cv = $('cv-candles');
+  const res = drawCandles(cv, chartCandles(), S.kv);
+  S.kv.maxOffset = res.maxOffset;
+  if (cv._hover) res.k ? showTip(candleTip(res.k), cv._hover.cx, cv._hover.cy) : hideTip();
   drawSpark($('cv-ld'), S.candles.slice(-40).map((k) => k.c), rec && rec.chg < 0 ? C.red : C.green);
 }
 
@@ -617,14 +724,25 @@ function renderBasis() {
   setText('bs-prem', lb && Number.isFinite(lb.prem) ? F.bps(lb.prem) + ' bp' : '—', lb ? F.cls(lb.prem) : '');
   setText('bs-mark', fu && fu.mark ? F.price(fu.mark) : '—');
   setText('bs-index', fu && fu.index ? F.price(fu.index) : '—');
-  drawBasis($('cv-basis'), S.basis, { basis: t('bs.legend.basis'), prem: t('bs.legend.prem'), lat: t('bs.legend.lat') });
+  const cvb = $('cv-basis');
+  const bi = drawBasis(cvb, S.basis, { basis: t('bs.legend.basis'), prem: t('bs.legend.prem'), lat: t('bs.legend.lat') });
+  if (cvb._hover) {
+    const p = S.basis[bi];
+    if (p) {
+      const ms = (v) => (Number.isFinite(v) ? Math.max(0, Math.round(v)) + ' ms' : '—');
+      showTip(`<div class="tt-h">${F.esc(F.base(S.sel))} · ${F.hms(p.ts)}</div>` +
+        tr(t('bs.basis'), Number.isFinite(p.bps) ? F.bps(p.bps) + ' bp' : '—', F.cls(p.bps)) +
+        tr(t('bs.prem'), Number.isFinite(p.prem) ? F.bps(p.prem) + ' bp' : '—', F.cls(p.prem)) +
+        tr(t('bs.latS'), ms(p.latS)) + tr(t('bs.latF'), ms(p.latF)), cvb._hover.cx, cvb._hover.cy);
+    } else hideTip();
+  }
 }
 
 function renderWire() {
   const rowsFit = Math.max(6, Math.floor($('wire').clientHeight / 15));
-  $('wire').innerHTML = S.wire.slice(0, rowsFit).map((e) =>
+  setText('wi-rate', S.wirePaused ? t('wi.paused') : S.fps + ' msg/s');
+  if (!S.wirePaused) $('wire').innerHTML = S.wire.slice(0, rowsFit).map((e) =>
     `<div class="wr${e.hl ? ' hl' : ''}"><span class="ts">${F.hmsms(e.ts)}</span><span class="${e.cls}">${F.esc(e.ch)}</span><span>${F.esc(e.txt)}</span></div>`).join('');
-  setText('wi-rate', S.fps + ' msg/s');
   setText('wi-total', F.num(S.frames));
   setText('wi-bytes', F.bytes((spotWS?.bytes || 0) + (futWS?.bytes || 0)));
   setText('wi-subs', String((spotWS?.subs.size || 0) + (futWS?.subs.size || 0)));
@@ -634,7 +752,11 @@ let whalesVer = -1;
 function renderWhales() {
   setText('wh-th', t('wh.th', { s: F.usd(SPOT_WHALE, 0), p: F.usd(PERP_WHALE, 0) }));
   setText('hist-now', S.hist[S.hist.length - 1] + '/s');
-  drawBars($('cv-hist'), S.hist, C.amber);
+  const cvh = $('cv-hist'), hb = drawBars(cvh, S.hist, C.amber);
+  if (cvh._hover && hb >= 0) {
+    const ago = S.hist.length - hb;
+    showTip(`<div class="tt-h">${F.hms(Date.now() + S.offset - ago * 1000)} · ${F.esc(t('tt.ago', { s: ago }))}</div>` + tr(t('wh.tt'), S.hist[hb] + '/s'), cvh._hover.cx, cvh._hover.cy);
+  }
   if (whalesVer === S.ver.whales) return;
   const box = $('whales');
   const known = new Set([...box.children].map((el) => el.dataset.id));
@@ -676,7 +798,13 @@ function renderTape() {
     buckets[i][f.side] += f.notional;
     if (f.side === 'buy') buy += f.notional; else sell += f.notional;
   }
-  drawFlow($('cv-flow'), buckets);
+  const cvf = $('cv-flow'), fi = drawFlow(cvf, buckets);
+  if (cvf._hover && fi >= 0) {
+    const b = buckets[fi], from = now + S.offset - (12 - fi) * 5000;
+    showTip(`<div class="tt-h">${F.esc(F.base(S.sel))} · ${F.hms(from)} – ${F.hms(from + 5000)}</div>` +
+      tr(t('tp.tt.buy'), F.usd(b.buy), 'up') + tr(t('tp.tt.sell'), F.usd(b.sell), 'dn') + tr(t('tp.tt.net'), F.usd(b.buy - b.sell), F.cls(b.buy - b.sell)),
+    cvf._hover.cx, cvf._hover.cy);
+  }
   setText('fl-buy', '▲ ' + F.usd(buy));
   setText('fl-sell', '▼ ' + F.usd(sell));
   const lt = S.tape[0];
@@ -729,7 +857,7 @@ function renderFunnelPanel() {
 function renderMarquees() {
   const mk = S.mk, fm = S.fm;
   if (!mk) return;
-  const it = (r) => `<span class="it">${F.esc(r.base)} <b>${F.price(r.last)}</b><span class="${F.cls(r.chg)}">${F.pct(r.chg)}</span></span>`;
+  const it = (r) => `<span class="it" data-pair="${F.esc(r.pair)}">${F.esc(r.base)} <b>${F.price(r.last)}</b><span class="${F.cls(r.chg)}">${F.pct(r.chg)}</span></span>`;
   const majors = S.focus.slice(0, 12).map((p) => S.spotAll.get(p)).filter(Boolean);
   $('mq-top').innerHTML = majors.map(it).join('') +
     `<span class="it ch-sys">${F.esc(t('mq.gain'))} ▲</span>` + mk.gainers.map(it).join('') +
@@ -843,9 +971,9 @@ function render() {
 }
 
 // ---------------------------------------------------------------- tooltip
-const onHover = (sym, x, y) => showTip($('shell-tip'), $('shell-wrap'), sym, x, y);
-const onHeatHover = (sym, x, y) => showTip($('hm-tip'), document.querySelector('.hm-wrap'), sym, x, y);
-function showTip(tip, wrap, sym, x, y) {
+const onHover = (sym, x, y) => showSymTip($('shell-tip'), $('shell-wrap'), sym, x, y);
+const onHeatHover = (sym, x, y) => showSymTip($('hm-tip'), document.querySelector('.hm-wrap'), sym, x, y);
+function showSymTip(tip, wrap, sym, x, y) {
   if (!sym) { tip.style.display = 'none'; return; }
   const r = S.spotAll.get(sym), fu = S.futAll.get(sym);
   if (!r) return;
@@ -873,12 +1001,19 @@ function loop(now) {
   }
   if (funnel) {
     const cs = S.candles.slice(-60);
-    funnel.draw(now, {
+    const fh = funnel.draw(now, {
       closes: cs.map((k) => ({ t: k.t, c: k.c })),
       last: S.spotAll.get(S.sel)?.last,
       sigma1m: sigma1m(),
       labels: { now: t('fn.now'), wait: t('fn.wait') },
     });
+    const cvn = $('cv-funnel');
+    if (cvn._hover) {
+      const lastPx = S.spotAll.get(S.sel)?.last;
+      fh ? showTip(`<div class="tt-h">${F.esc(F.base(S.sel))} · ${fh.now ? F.esc(t('fn.now')) : F.dhm(fh.t)}</div>` +
+        tr(t('fn.tt.close'), F.price(fh.c)) + (fh.now ? '' : tr(t('fn.tt.vs'), F.pct(((lastPx - fh.c) / fh.c) * 100), F.cls(lastPx - fh.c))),
+      cvn._hover.cx, cvn._hover.cy) : hideTip();
+    }
   }
   requestAnimationFrame(loop);
 }
@@ -899,12 +1034,33 @@ async function boot() {
   try {
     pulse = createPulse($('cv-pulse'), {
       onPick: selectSymbol,
+      onHover: (it, cx, cy) => {
+        if (!it) { hideTip(); return; }
+        const r = S.spotAll.get(it.sym);
+        showTip(`<div class="tt-h">${F.esc(it.label)} / USDT</div>` + tr(t('sh.tip.chg'), F.pct(it.chg), F.cls(it.chg)) +
+          (r ? tr(t('sh.tip.price'), F.price(r.last)) + tr(t('sh.tip.vol'), F.usd(r.qv)) : '') + `<div class="tt-f">${F.esc(t('lq.tt.click'))}</div>`, cx, cy);
+      },
       onFocus: (it) => {
         $('pl-focus').innerHTML = it ? `${F.esc(it.label)} <span class="${F.cls(it.chg)}">${F.pct(it.chg)}</span>` : '';
       },
     });
   } catch (e) {
     pulse = null;
+  }
+  initKlineControls();
+  hoverable($('cv-basis'), renderBasis);
+  hoverable($('cv-dist'), renderOverview);
+  hoverable($('cv-hist'), renderWhales);
+  hoverable($('cv-flow'), renderTape);
+  hoverable($('cv-funnel'), () => {});
+  for (const id of ['depth-asks', 'depth-bids', 'ladder']) {
+    $(id).addEventListener('pointermove', (e) => { S.bookHover = { cx: e.clientX, cy: e.clientY }; bookTip(e.clientX, e.clientY); });
+    $(id).addEventListener('pointerleave', () => { S.bookHover = null; hideTip(); });
+  }
+  $('wire').addEventListener('pointerenter', () => { S.wirePaused = true; renderWire(); });
+  $('wire').addEventListener('pointerleave', () => { S.wirePaused = false; renderWire(); });
+  for (const id of ['mq-top', 'mq-bottom']) {
+    $(id).addEventListener('click', (e) => { const x = e.target.closest('[data-pair]'); if (x) selectSymbol(x.dataset.pair); });
   }
   picker = createPicker($('picker'), { getRows: pickerRows, getRec: (p) => S.spotAll.get(p), getSel: () => S.sel, onPick: selectSymbol });
   liqChart = createLiqChart($('lq-chart'), { onPick: selectSymbol, getNow: () => Date.now() + S.offset, getSel: () => S.sel });
@@ -955,12 +1111,8 @@ async function boot() {
   setInterval(flushOrders, 250);
   setInterval(render, 250);
 
-  try {
-    const t0 = Date.now(), r = await rest('/spot/time'), t1 = Date.now();
-    const raw = r.server_time - (t0 + t1) / 2;
-    // only correct the local clock when it is clearly off; the round trip is too noisy otherwise
-    S.offset = Math.abs(raw) > (t1 - t0) ? raw : 0;
-  } catch (e) { /* use local clock */ }
+  await syncClock();
+  setInterval(syncClock, 300000);
 
   // retry until the first market snapshot is in
   while (!S.spotAll.size) {

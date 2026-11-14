@@ -32,7 +32,7 @@ void main() {
   gl_FragColor = vec4(vCol * (0.35 + 0.9 * k), 0.18 + 0.82 * k);
 }`;
 
-export function createPulse(canvas, { onPick, onFocus } = {}) {
+export function createPulse(canvas, { onPick, onFocus, onHover } = {}) {
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -144,7 +144,32 @@ export function createPulse(canvas, { onPick, onFocus } = {}) {
     if (it) it.flash = Math.min(1.5, it.flash + amt);
   }
 
-  canvas.addEventListener('click', () => { if (focusIdx >= 0 && items[focusIdx] && onPick) onPick(items[focusIdx].sym); });
+  // hover: hit-test the projected pillars (front ones win); click picks the hovered pillar or the front one
+  const scr = Array.from({ length: N }, () => ({ x: 0, yb: 0, yt: 0, z: 0, ok: false }));
+  const pv = new THREE.Vector3();
+  let mouse = null, hoverIdx = -1;
+  function hitTest() {
+    hoverIdx = -1;
+    if (!mouse) return;
+    let best = Infinity;
+    for (let i = 0; i < N; i++) {
+      const s = scr[i];
+      if (!s.ok) continue;
+      const dx = Math.abs(s.x - mouse.x), y0 = Math.min(s.yb, s.yt) - 6, y1 = Math.max(s.yb, s.yt) + 6;
+      if (dx > 9 || mouse.y < y0 || mouse.y > y1) continue;
+      const score = dx - s.z * 4; // prefer pillars in front
+      if (score < best) { best = score; hoverIdx = i; }
+    }
+  }
+  canvas.addEventListener('pointermove', (e) => {
+    const r = canvas.getBoundingClientRect();
+    mouse = { x: e.clientX - r.left, y: e.clientY - r.top, cx: e.clientX, cy: e.clientY };
+  });
+  canvas.addEventListener('pointerleave', () => { mouse = null; hoverIdx = -1; onHover && onHover(null); });
+  canvas.addEventListener('click', () => {
+    const i = hoverIdx >= 0 ? hoverIdx : focusIdx;
+    if (i >= 0 && items[i] && onPick) onPick(items[i].sym);
+  });
 
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
@@ -167,9 +192,12 @@ export function createPulse(canvas, { onPick, onFocus } = {}) {
       const sw = Math.max(0, 1 - d / 0.45);
       const k = Math.min(1, 0.35 + 0.5 * depth + sw * 0.5 + it.flash * 0.6);
       col.copy(it.chg >= 0 ? GREEN : RED).multiplyScalar(k);
-      if (i === focusIdx) col.lerp(CYAN, 0.6);
+      if (i === focusIdx || i === hoverIdx) col.lerp(CYAN, 0.6);
       bars.setColorAt(i, col);
       tipPos[i * 3] = x; tipPos[i * 3 + 1] = hh; tipPos[i * 3 + 2] = z;
+      const cw = canvas.clientWidth, ch = canvas.clientHeight;
+      pv.set(x, 0, z).project(camera); scr[i].x = (pv.x + 1) / 2 * cw; scr[i].yb = (1 - pv.y) / 2 * ch;
+      pv.set(x, hh, z).project(camera); scr[i].yt = (1 - pv.y) / 2 * ch; scr[i].z = depth; scr[i].ok = true;
       tipCol[i * 3] = col.r; tipCol[i * 3 + 1] = col.g; tipCol[i * 3 + 2] = col.b;
     }
     bars.instanceMatrix.needsUpdate = true;
@@ -185,6 +213,9 @@ export function createPulse(canvas, { onPick, onFocus } = {}) {
     core.material.color.copy(breadth >= 0.5 ? GREEN : RED).lerp(CYAN, 0.45);
     renderer.render(scene, camera);
     if (best !== focusIdx) { focusIdx = best; onFocus && onFocus(items[best]); }
+    hitTest();
+    canvas.style.cursor = hoverIdx >= 0 ? 'pointer' : '';
+    if (mouse && onHover) onHover(hoverIdx >= 0 ? items[hoverIdx] : null, mouse.cx, mouse.cy);
   }
 
   return { setData, update, bump, frame };
