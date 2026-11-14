@@ -156,7 +156,15 @@
         <div class="card"><label data-i18n="lq.c.max"></label><b id="lq-max">—</b><small id="lq-max-s">—</small></div>
         <div class="card"><label data-i18n="lq.c.ratio"></label><b id="lq-ratio">—</b><div class="lq-split"><i id="lq-split-l"></i><i id="lq-split-s"></i></div></div>
       </div>
-      <div class="lq-chart"><canvas id="cv-liq"></canvas></div>
+      <div class="lq-chart" id="lq-chart">
+        <div class="lq-ctl">
+          <div class="seg" data-k="side"><button type="button" data-v="all" class="on" data-i18n="lq.f.all"></button><button type="button" data-v="long" data-i18n="lq.f.long"></button><button type="button" data-v="short" data-i18n="lq.f.short"></button></div>
+          <div class="seg" data-k="min"><button type="button" data-v="0" class="on" data-i18n="lq.f.any"></button><button type="button" data-v="1000">≥$1K</button><button type="button" data-v="10000">≥$10K</button><button type="button" data-v="100000">≥$100K</button></div>
+          <div class="seg" data-k="range"><button type="button" data-v="15">15m</button><button type="button" data-v="60" class="on">1H</button></div>
+          <span class="lq-hint" data-i18n="lq.hint"></span>
+        </div>
+        <div class="lq-cv"><canvas id="cv-liq"></canvas><div class="shell-tip lq-tip"></div></div>
+      </div>
       <div class="lq-side">
         <div class="dv-h"><span data-i18n="lq.top"></span><span data-i18n="lq.top.cols"></span></div>
         <div class="dv-list" id="lq-top"></div>

@@ -1,7 +1,8 @@
 import { t, setLang, getLang, onLang, applyDom } from './i18n.js';
 import { rest, GateWS, SPOT_WS, PERP_WS } from './gate.js';
 import * as F from './fmt.js';
-import { C, drawCandles, drawSpark, drawBars, drawBasis, drawFlow, drawDist, drawLiqMap } from './charts.js';
+import { C, drawCandles, drawSpark, drawBars, drawBasis, drawFlow, drawDist } from './charts.js';
+import { createLiqChart } from './liqchart.js';
 import { createShell } from './shell3d.js';
 import { createFunnel } from './funnel.js';
 import { createPulse } from './pulse3d.js';
@@ -57,7 +58,7 @@ const S = {
   top: [], dist: [], median: NaN, dv: null, fundInterval: new Map(),
   liqAll: [], liqStats: null, // market-wide liquidations, newest first (last ~65 min)
 };
-let spotWS, futWS, shell, funnel, pulse, heat, picker, selToken = 0;
+let spotWS, futWS, shell, funnel, pulse, heat, picker, liqChart, selToken = 0;
 const inputs = [];
 
 // ---------------------------------------------------------------- REST pollers
@@ -465,6 +466,12 @@ function perSecond() {
 }
 
 // ---------------------------------------------------------------- rendering
+// replace innerHTML only when it actually changed (keeps hover state stable)
+function setHtml(id, html) {
+  const el = $(id);
+  if (el && el._html !== html) { el._html = html; el.innerHTML = html; }
+}
+
 function setText(id, txt, cl) {
   const el = $(id);
   if (!el) return;
@@ -749,14 +756,14 @@ function renderLiq() {
     $('lq-split-l').style.width = tot ? (st.long / tot) * 100 + '%' : '50%';
     $('lq-split-s').style.width = tot ? (st.short / tot) * 100 + '%' : '50%';
     const mx = st.top[0] ? st.top[0].l + st.top[0].s : 1;
-    $('lq-top').innerHTML = st.top.map((b) => `<div class="dv-row lq-row" data-pair="${F.esc(b.pair)}">` +
+    setHtml('lq-top', st.top.map((b) => `<div class="dv-row lq-row" data-pair="${F.esc(b.pair)}">` +
       `<i class="bar-r" style="width:${((b.l / mx) * 100).toFixed(1)}%"></i><i class="bar-g" style="left:${((b.l / mx) * 100).toFixed(1)}%;width:${((b.s / mx) * 100).toFixed(1)}%"></i>` +
-      `<span class="dv-b">${F.esc(F.base(b.pair))}</span><span>${F.usd(b.l + b.s)}</span><span><em class="dn">${F.usd(b.l, 0)}</em> / <em class="up">${F.usd(b.s, 0)}</em></span></div>`).join('');
+      `<span class="dv-b">${F.esc(F.base(b.pair))}</span><span>${F.usd(b.l + b.s)}</span><span class="${b.l >= b.s ? 'dn' : 'up'}">${((b.l / (b.l + b.s)) * 100).toFixed(0)}%</span></div>`).join(''));
   }
   if (lqVer === S.ver.liqs) return;
   lqVer = S.ver.liqs;
   const fresh = Date.now() + S.offset - 5000;
-  $('lq-feed').innerHTML = S.liqAll.slice(0, 10).map((q) => `<div class="lq-item${q.ts > fresh ? ' new' : ''}">` +
+  $('lq-feed').innerHTML = S.liqAll.slice(0, 10).map((q) => `<div class="lq-item${q.ts > fresh ? ' new' : ''}" data-pair="${F.esc(q.pair)}">` +
     `<span class="ts">${F.hms(q.ts)}</span><b>${F.esc(F.base(q.pair))}</b>` +
     `<span class="lq-tag ${q.side === 'long' ? 'dn' : 'up'}">${F.esc(t(q.side === 'long' ? 'fn.liq.long' : 'fn.liq.short'))}</span>` +
     `<em>${F.usd(q.notional)}</em><span class="px">@ ${F.price(q.px)}</span></div>`).join('') ||
@@ -851,14 +858,10 @@ function showTip(tip, wrap, sym, x, y) {
 }
 
 // ---------------------------------------------------------------- main loop
-let lastLiqDraw = 0;
 function loop(now) {
   pulse && pulse.frame(now);
   heat && heat.draw(now);
-  if (now - lastLiqDraw > 250) {
-    lastLiqDraw = now;
-    drawLiqMap($('cv-liq'), S.liqAll, Date.now() + S.offset, { now: t('fn.now'), empty: t('lq.empty') });
-  }
+  liqChart && liqChart.draw(now, S.liqAll);
   if (shell) {
     const wires = inputs.map((c) => {
       const sym = c.sym || S.sel;
@@ -897,9 +900,21 @@ async function boot() {
     pulse = null;
   }
   picker = createPicker($('picker'), { getRows: pickerRows, getRec: (p) => S.spotAll.get(p), getSel: () => S.sel, onPick: selectSymbol });
-  document.querySelector('.a-lq').addEventListener('click', (e) => {
-    const row = e.target.closest('.lq-row');
+  liqChart = createLiqChart($('lq-chart'), { onPick: selectSymbol, getNow: () => Date.now() + S.offset, getSel: () => S.sel });
+  const lqPanel = document.querySelector('.a-lq');
+  lqPanel.addEventListener('click', (e) => {
+    const row = e.target.closest('.lq-row, .lq-item');
     if (row) selectSymbol(row.dataset.pair);
+  });
+  // hovering a contract in the side lists highlights its bubbles; pointermove
+  // (not over/out) so it keeps working while the lists re-render underneath
+  let hl = null;
+  lqPanel.querySelectorAll('.lq-side').forEach((side) => {
+    side.addEventListener('pointermove', (e) => {
+      const row = e.target.closest('.lq-row, .lq-item'), p = row ? row.dataset.pair : null;
+      if (p !== hl) { hl = p; liqChart.setHighlight(p); }
+    });
+    side.addEventListener('pointerleave', () => { hl = null; liqChart.setHighlight(null); });
   });
   document.querySelector('.a-dv').addEventListener('click', (e) => {
     const row = e.target.closest('.dv-row');

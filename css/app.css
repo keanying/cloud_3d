@@ -299,10 +299,22 @@ canvas { display: block; }
 .lq-split { display: flex; height: 4px; margin-top: 4px; border-radius: 2px; overflow: hidden; background: #13203b; }
 .lq-split i { display: block; height: 100%; }
 #lq-split-l { background: var(--red); } #lq-split-s { background: var(--green); }
-.lq-chart { position: relative; min-height: 230px; border: 1px solid var(--line); background: rgba(4, 9, 20, .45); }
-.lq-chart canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.lq-chart { display: flex; flex-direction: column; min-height: 260px; border: 1px solid var(--line); background: rgba(4, 9, 20, .45); min-width: 0; }
+.lq-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 3px; overflow: hidden; }
+.seg button { background: transparent; border: 0; border-right: 1px solid var(--line2); color: var(--dim); font: inherit; font-size: 10px; padding: 2px 8px; cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button:hover { color: var(--white); background: rgba(69, 212, 255, .06); }
+.seg button.on { color: #04121c; background: var(--cyan); font-weight: 800; }
+.lq-hint { margin-left: auto; font-size: 9.5px; color: var(--dim2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lq-cv { position: relative; flex: 1; min-height: 210px; }
+.lq-cv canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.lq-tip { min-width: 190px; }
+.tt-f { margin-top: 3px; color: var(--dim2); font-size: 9.5px; }
+.lq-item { cursor: pointer; }
+.lq-item:hover, .lq-row:hover { background: rgba(69, 212, 255, .08); }
 .lq-side { min-width: 0; }
-.lq-row { grid-template-columns: 1fr .9fr 1.1fr; }
+.lq-row { grid-template-columns: 1fr 1fr 48px; }
 .lq-row i.bar-g { opacity: .2; }
 .lq-row em { font-style: normal; }
 .live-mini { display: inline-flex; align-items: center; gap: 4px; color: var(--red) !important; font-weight: 800; }
